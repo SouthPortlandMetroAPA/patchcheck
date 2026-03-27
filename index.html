@@ -869,7 +869,7 @@
           type="tel"
           enterkeyhint="search"
           autocomplete="off"
-          placeholder="APA #"
+          placeholder="APA # or Email"
         />
         <button id="goButton" class="search-btn" type="submit">SEARCH</button>
       </form>
@@ -1421,7 +1421,7 @@
         clearDashboard();
 
         if (!raw.trim()) {
-          showMessage("error", "Enter a member number.");
+          showMessage("error", "Enter your APA # or email address.");
           input.focus();
           return;
         }
@@ -1445,6 +1445,9 @@
               (data.name || "");
             showMemberPill(pillText);
             renderDashboard(data);
+
+            // Remember input for auto-lookup on return
+            try { sessionStorage.setItem('patchcheck_lastInput', raw.trim()); } catch (e) {}
           }
         } catch (err) {
           showMessage("error", "Something went wrong. Try again.");
@@ -1509,7 +1512,19 @@
         });
 
         loadSessions();
-        input.focus();
+
+        // Auto-lookup from sessionStorage (returning user)
+        try {
+          var lastInput = sessionStorage.getItem('patchcheck_lastInput');
+          if (lastInput) {
+            input.value = lastInput;
+            handleSearch();
+          } else {
+            input.focus();
+          }
+        } catch (e) {
+          input.focus();
+        }
       });
     </script>
   </body>
