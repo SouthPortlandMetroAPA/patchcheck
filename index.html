@@ -874,6 +874,7 @@
       </form>
 
       <div id="memberPill" class="member-pill" style="display:none;"></div>
+      <div id="reportInfo" style="text-align:center; font-size:0.78rem; color:var(--muted); margin: 0 0 10px; display:none;"></div>
 
       <div id="messageContainer"></div>
 
@@ -961,7 +962,7 @@
 
 /* ── App identity ── */
 const APP_NAME    = 'PatchCheck';
-const APP_VERSION = '1.0';
+const APP_VERSION = '1.1';
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -1055,6 +1056,7 @@ var _isMastersDiv = {};  // division_number → bool
 var _spmDivNums = [];    // SPM division_numbers for the session
 var _teamName = {};      // 'divNum|teamNum-parsed' → team_name
 var _sessionStart = null;
+var _reportPrintedAt = '';   // text from sp_reports.source_printed_at
 var _llReportId = null;
 var _bdReportId = null;
 var _skReportId = null;
@@ -1448,13 +1450,34 @@ async function loadSessionMeta(sessionId) {
     + '&report_kind=eq.ll&select=id&order=uploaded_at.desc&limit=1');
   var bdRep = await sbGet('slate',
     'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
-    + '&report_kind=eq.bd&select=id&order=uploaded_at.desc&limit=1');
+    + '&report_kind=eq.bd&select=id,source_printed_at&order=uploaded_at.desc&limit=1');
   var skRep = await sbGet('slate',
     'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
     + '&report_kind=eq.8skunk&select=id&order=uploaded_at.desc&limit=1');
   _llReportId = llRep[0] ? llRep[0].id : null;
   _bdReportId = bdRep[0] ? bdRep[0].id : null;
   _skReportId = skRep[0] ? skRep[0].id : null;
+  _reportPrintedAt = (bdRep[0] && bdRep[0].source_printed_at) || '';
+  renderReportInfo();
+}
+
+/* "Report printed 5/19/2026 5:36 PM" — drops the seconds and inserts a
+   space before AM/PM so the timestamp from sp_reports.source_printed_at
+   reads cleanly. Source format example: "5/19/2026 5:36:19PM". */
+function formatPrintedAt(raw) {
+  if (!raw) return '';
+  return String(raw).trim().replace(/(\d):\d\d\s*([AP]M)/i, '$1 $2');
+}
+function renderReportInfo() {
+  var el = document.getElementById('reportInfo');
+  if (!el) return;
+  if (_reportPrintedAt) {
+    el.textContent = 'Report printed ' + formatPrintedAt(_reportPrintedAt);
+    el.style.display = 'block';
+  } else {
+    el.textContent = '';
+    el.style.display = 'none';
+  }
 }
 
 /* ── Player search ── */
