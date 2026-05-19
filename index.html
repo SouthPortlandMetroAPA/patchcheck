@@ -962,7 +962,7 @@
 
 /* ── App identity ── */
 const APP_NAME    = 'PatchCheck';
-const APP_VERSION = '1.1';
+const APP_VERSION = '1.2';
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -1472,7 +1472,7 @@ function renderReportInfo() {
   var el = document.getElementById('reportInfo');
   if (!el) return;
   if (_reportPrintedAt) {
-    el.textContent = 'Report printed ' + formatPrintedAt(_reportPrintedAt);
+    el.textContent = 'Last updated ' + formatPrintedAt(_reportPrintedAt);
     el.style.display = 'block';
   } else {
     el.textContent = '';
