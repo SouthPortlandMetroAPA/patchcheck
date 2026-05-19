@@ -927,604 +927,815 @@
           <span class="opt-out-sub">Opt out of one or more patches here</span>
         </a>
       </div>
+      <div class="footer-note" id="appFooter" style="margin-top:10px;"></div>
     </div>
 
     <script>
-      /* ── State ── */
+/* ══════════════════════════════════════════════════════════════════════
+   PatchCheck — player-facing SP lookup (Supabase-backed, go-forward)
+   ──────────────────────────────────────────────────────────────────────
+   Reads the slate schema of the spm-apa Supabase project directly over
+   PostgREST. No Google Apps Script, no Cloudflare worker.
 
-      var allResults = [];
-      var allSPTypes = [];
-      var activeSpType = null;
-      var activeStatusFilter = null;
+   DATA SOURCES (schema: slate, operator_id 1 = SPM)
+     sessions ............ sessions with SP data drive the dropdown
+     sp_reports .......... pick the latest cumulative ll / bd / 8skunk
+                           report for the session
+     sp_by_division_rows . per-(member×team×division) count of each
+                           SP code — expanded into pseudo-events
+     sp_skunk_events ..... real per-event 8-Ball Shutouts with date
+     sp_patches .......... one row per earned patch (member × division
+                           × sp_type for non-slam; member × sp_type for
+                           slam); carries the mail status
+     divisions / teams ... names, formats, night-of-play, team names
+     rpc ss_player_lookup  resolve APA#/email to a player (SECURITY
+                           DEFINER — players table stays sealed)
 
-      /* ── API ── */
+   Slate is aggregate-only for r/8/x/9/n/k — the source reports carry
+   per-member counts, not per-event records. PatchCheck still presents
+   one row per earned SP by repeating a (division, team, sp) cell N
+   times; week-of-play is blank for those (only shutouts carry dates).
+   The week becomes "complete" again when APA exposes per-event report
+   data — until then this is the honest view.
+   ══════════════════════════════════════════════════════════════════════ */
 
-      var API_URL = 'https://patchcheck.spmapa.workers.dev';
+/* ── App identity ── */
+const APP_NAME    = 'PatchCheck';
+const APP_VERSION = '1.0';
 
-      function callServer(action, params) {
-        var payload = Object.assign({ action: action }, params || {});
+/* ── Supabase ── */
+const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
+const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
+const OPERATOR_ID = 1;   // SPM
 
-        return fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify(payload),
-          redirect: 'follow'
-        }).then(function(response) {
-          if (!response.ok) throw new Error('Network error: ' + response.status);
-          return response.json();
+function sbHeaders(profile) {
+  return {
+    apikey: SB_ANON,
+    Authorization: 'Bearer ' + SB_ANON,
+    'Accept-Profile': profile,
+    'Content-Profile': profile,
+    'Content-Type': 'application/json'
+  };
+}
+function sbGet(profile, path) {
+  return fetch(SB_URL + '/rest/v1/' + path, { headers: sbHeaders(profile) })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + path);
+      return r.json();
+    });
+}
+async function sbGetAll(profile, pathBase) {
+  var out = [], from = 0, size = 1000;
+  for (;;) {
+    var sep = pathBase.indexOf('?') >= 0 ? '&' : '?';
+    var page = await sbGet(profile,
+      pathBase + sep + 'limit=' + size + '&offset=' + from);
+    out = out.concat(page);
+    if (!page.length || page.length < size) break;
+    from += size;
+  }
+  return out;
+}
+function sbRpc(profile, fn, args) {
+  return fetch(SB_URL + '/rest/v1/rpc/' + fn, {
+    method: 'POST', headers: sbHeaders(profile), body: JSON.stringify(args || {})
+  }).then(function (r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' on rpc/' + fn);
+    return r.json();
+  });
+}
+
+/* ── SP codes / labels ────────────────────────────────────────────────
+   The by-division report carries six count columns. For non-Masters
+   divisions they map to the regular codes; for Masters divisions, the
+   8-/9-Ball columns get remapped to m8/mx/m9/mn (per the legacy compute
+   step). r and k have no masters variant. Slam codes (8m/9m/g) are
+   produced by the slate compute step itself and live in sp_patches. */
+const SP_COL = {
+  r: 'rackless', '8': 'eight_ob', x: 'eight_br',
+  '9': 'nine_os', n: 'nine_br', k: 'skunk'
+};
+const SP_LABEL = {
+  r:  '8 Ball Rackless',
+  '8':'8 Ball On the Break',
+  x:  '8 Ball Break & Run',
+  '9':'9 Ball On the Snap',
+  n:  '9 Ball Break & Run',
+  k:  '9 Ball Skunk',
+  m8: '8 Ball On the Break (Masters)',
+  mx: '8 Ball Break & Run (Masters)',
+  m9: '9 Ball On the Snap (Masters)',
+  mn: '9 Ball Break & Run (Masters)',
+  '8m':'8 Ball Mini-Slam',
+  '9m':'9 Ball Mini-Slam',
+  g:   'Grand Slam',
+  s:   '8 Ball Shutout'
+};
+const MASTERS_REMAP = { '8':'m8', x:'mx', '9':'m9', n:'mn' };
+const BASE_LABELS = [
+  SP_LABEL.r, SP_LABEL['8'], SP_LABEL.x,
+  SP_LABEL['9'], SP_LABEL.n, SP_LABEL.k,
+  SP_LABEL['8m'], SP_LABEL['9m'], SP_LABEL.g,
+  SP_LABEL.s
+];
+const MASTERS_LABELS = [SP_LABEL.m8, SP_LABEL.mx, SP_LABEL.m9, SP_LABEL.mn];
+
+/* ── State ── */
+var allResults = [];
+var allSPTypes = [];
+var activeSpType = null;
+var activeStatusFilter = null;
+
+var sessions = [];
+var currentSession = null;
+var lastReportStamp = '';
+/* Per-session caches — refilled on session change. */
+var _divisions = [];     // [{division_number,name,format,night_of_play}]
+var _isMastersDiv = {};  // division_number → bool
+var _spmDivNums = [];    // SPM division_numbers for the session
+var _teamName = {};      // 'divNum|teamNum-parsed' → team_name
+var _sessionStart = null;
+var _llReportId = null;
+var _bdReportId = null;
+var _skReportId = null;
+
+/* ── UI helpers ── */
+function esc(s) {
+  var d = document.createElement('div');
+  d.textContent = s == null ? '' : s;
+  return d.innerHTML;
+}
+function setStatus(t) {
+  document.getElementById('statusText').textContent = t || '';
+}
+function setLoading(on) {
+  var btn = document.getElementById('goButton');
+  btn.disabled = on;
+  btn.textContent = on ? 'SEARCHING...' : 'SEARCH';
+}
+function showMessage(type, text) {
+  var c = document.getElementById('messageContainer');
+  c.innerHTML = '';
+  if (!text) return;
+  var d = document.createElement('div');
+  d.className = 'msg ' + (type === 'error' ? 'msg-error' : 'msg-info');
+  d.textContent = text;
+  c.appendChild(d);
+}
+function showMemberPill(name) {
+  var pill = document.getElementById('memberPill');
+  if (!name) { pill.style.display = 'none'; pill.textContent = ''; return; }
+  pill.textContent = name;
+  pill.style.display = 'block';
+}
+function clearDashboard() {
+  showMemberPill('');
+  document.getElementById('dashboard').style.display = 'none';
+  document.getElementById('spButtonSection').innerHTML = '';
+  document.getElementById('detailPanel').classList.remove('visible');
+  document.getElementById('detailList').innerHTML = '';
+  document.getElementById('statusFilterRow').innerHTML = '';
+  document.getElementById('statusPanel').classList.remove('visible');
+  document.getElementById('statusPanelList').innerHTML = '';
+  allResults = [];
+  allSPTypes = [];
+  activeSpType = null;
+  activeStatusFilter = null;
+}
+
+/* ── Status classification ── */
+function statusClass(r) {
+  var disp = (r.statusDisplay || '').toLowerCase();
+  if (disp.indexOf('shutout') !== -1) return 'shutout';
+  if (disp.indexOf('already earned') !== -1) return 'duplicate';
+  if (disp.indexOf('mail') !== -1 && disp.indexOf('not yet') === -1) return 'mailed';
+  return 'pending';
+}
+function statusFilterKey(r) { return statusClass(r); }
+
+var SLAMS = {
+  '8 Ball Mini-Slam': true,
+  '9 Ball Mini-Slam': true,
+  'Grand Slam': true
+};
+function getShutoutParent(label) {
+  if (label === '8 Ball Rackless') return '8 Ball Shutout';
+  return null;
+}
+function isShutoutType(label) { return label === '8 Ball Shutout'; }
+function categorize(label) {
+  var l = label.toLowerCase();
+  if (l.indexOf('grand slam') !== -1) return 'Grand Slam';
+  if (l.indexOf('mini-slam') !== -1 || l.indexOf('mini slam') !== -1) return 'Mini-Slam';
+  if (l.indexOf('8') !== -1) return '8-Ball';
+  if (l.indexOf('9') !== -1) return '9-Ball';
+  return 'Other';
+}
+var CATEGORY_ORDER = ['8-Ball', '9-Ball', 'Mini-Slam', 'Grand Slam', 'Other'];
+
+/* ── SP type buttons ── */
+function renderSPButtons() {
+  var section = document.getElementById('spButtonSection');
+  section.innerHTML = '';
+
+  var earnedMap = {};
+  allResults.forEach(function (r) {
+    var label = r.spDescription || 'Unknown';
+    (earnedMap[label] = earnedMap[label] || []).push(r);
+  });
+  var shutoutBadgeCounts = {};
+  allResults.forEach(function (r) {
+    var parent = getShutoutParent(r.spDescription);
+    if (parent) shutoutBadgeCounts[parent] = (shutoutBadgeCounts[parent] || 0) + 1;
+  });
+
+  var typeOrder = [];
+  allSPTypes.forEach(function (label) {
+    if (typeOrder.indexOf(label) === -1) typeOrder.push(label);
+  });
+  Object.keys(earnedMap).forEach(function (label) {
+    if (typeOrder.indexOf(label) === -1) typeOrder.push(label);
+  });
+
+  var categoryMap = {};
+  typeOrder.forEach(function (label) {
+    var cat = categorize(label);
+    (categoryMap[cat] = categoryMap[cat] || []).push(label);
+  });
+
+  CATEGORY_ORDER.forEach(function (cat) {
+    var types = categoryMap[cat];
+    if (!types || !types.length) return;
+    var group = document.createElement('div');
+    group.className = 'sp-category';
+    var row = document.createElement('div');
+    row.className = 'sp-buttons';
+    types.forEach(function (label) {
+      var items = earnedMap[label] || [];
+      var racklessCount = (isShutoutType(label) && shutoutBadgeCounts[label]) ? shutoutBadgeCounts[label] : 0;
+      var badgeCount = items.length + racklessCount;
+      var isEarned = badgeCount > 0;
+      var isSlam = SLAMS[label] || false;
+      var btn = document.createElement('span');
+      btn.className = 'sp-btn ' + (isEarned ? 'earned' : 'not-earned');
+      btn.setAttribute('data-sp', label);
+      var badgeText;
+      if (!isEarned) badgeText = '✕';
+      else if (isSlam) badgeText = '✓';
+      else badgeText = String(badgeCount);
+      btn.innerHTML = esc(label) + ' <span class="badge">' + badgeText + '</span>'
+        + (isEarned ? ' <span class="chevron">›</span>' : '');
+      if (isEarned) btn.addEventListener('click', function () { toggleSPDetail(label); });
+      row.appendChild(btn);
+    });
+    group.appendChild(row);
+    section.appendChild(group);
+  });
+}
+
+function toggleSPDetail(label) {
+  var panel = document.getElementById('detailPanel');
+  activeStatusFilter = null;
+  document.getElementById('statusPanel').classList.remove('visible');
+  clearStatusFilterActive();
+  if (activeSpType === label) {
+    activeSpType = null;
+    panel.classList.remove('visible');
+    clearSpButtonActive();
+    return;
+  }
+  activeSpType = label;
+  highlightSpButton(label);
+
+  var items = allResults.filter(function (r) {
+    if (r.spDescription === label) return true;
+    if (isShutoutType(label)) {
+      var parent = getShutoutParent(r.spDescription);
+      return parent === label;
+    }
+    return false;
+  });
+  items.sort(function (a, b) {
+    var wa = parseInt(a.week, 10), wb = parseInt(b.week, 10);
+    if (isNaN(wa)) return 1;
+    if (isNaN(wb)) return -1;
+    return wa - wb;
+  });
+
+  document.getElementById('detailTitle').textContent = label;
+  var list = document.getElementById('detailList');
+  list.innerHTML = '';
+  var hasMixed = items.some(function (r) { return r.spDescription !== label; });
+
+  items.forEach(function (r) {
+    var item = document.createElement('div');
+    item.className = 'detail-item';
+    var sc = statusClass(r);
+    var typeNote = '';
+    if (hasMixed && r.spDescription !== label) {
+      typeNote = '<div class="detail-type-note">' + esc(r.spDescription) + '</div>';
+    }
+    var teamDisplay = r.team || '—';
+    if (r.teamName) teamDisplay += ' – ' + r.teamName;
+    item.innerHTML =
+      '<div class="detail-week">' + esc(r.week || '?') + '<small>Week</small></div>'
+      + '<div class="detail-info">'
+      +   '<div class="detail-team">' + esc(teamDisplay) + '</div>'
+      +   typeNote
+      +   '<span class="detail-status status-' + sc + '">'
+      +     esc(r.statusDisplay || 'Pending')
+      +   '</span>'
+      + '</div>';
+    list.appendChild(item);
+  });
+
+  panel.classList.add('visible');
+  setTimeout(function () { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 50);
+}
+function clearSpButtonActive() {
+  document.querySelectorAll('.sp-btn').forEach(function (b) { b.classList.remove('active'); });
+}
+function highlightSpButton(label) {
+  clearSpButtonActive();
+  document.querySelectorAll('.sp-btn.earned').forEach(function (b) {
+    if (b.getAttribute('data-sp') === label) b.classList.add('active');
+  });
+}
+
+/* ── Status filters ── */
+function renderStatusFilters() {
+  var section = document.getElementById('statusFilterSection');
+  var row = document.getElementById('statusFilterRow');
+  row.innerHTML = '';
+  if (!allResults.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+
+  var counts = {};
+  allResults.forEach(function (r) {
+    var k = statusFilterKey(r);
+    counts[k] = (counts[k] || 0) + 1;
+  });
+  var filters = [
+    { key: 'pending',   label: 'Not Yet Mailed' },
+    { key: 'mailed',    label: 'Mailed' },
+    { key: 'shutout',   label: 'Shutout' },
+    { key: 'duplicate', label: 'Duplicate' }
+  ];
+  filters.forEach(function (f) {
+    var count = counts[f.key] || 0;
+    if (count === 0) return;
+    var btn = document.createElement('span');
+    btn.className = 'status-filter-btn';
+    btn.setAttribute('data-status', f.key);
+    btn.innerHTML = esc(f.label)
+      + ' <span class="filter-count">' + count + '</span>'
+      + ' <span class="chevron">›</span>';
+    btn.addEventListener('click', function () { toggleStatusFilter(f.key, f.label); });
+    row.appendChild(btn);
+  });
+}
+function toggleStatusFilter(key, label) {
+  var panel = document.getElementById('statusPanel');
+  activeSpType = null;
+  document.getElementById('detailPanel').classList.remove('visible');
+  clearSpButtonActive();
+  if (activeStatusFilter === key) {
+    activeStatusFilter = null;
+    panel.classList.remove('visible');
+    clearStatusFilterActive();
+    return;
+  }
+  activeStatusFilter = key;
+  highlightStatusFilter(key);
+
+  var items = allResults.filter(function (r) { return statusFilterKey(r) === key; });
+  items.sort(function (a, b) {
+    var wa = parseInt(a.week, 10), wb = parseInt(b.week, 10);
+    if (isNaN(wa)) return 1;
+    if (isNaN(wb)) return -1;
+    return wa - wb;
+  });
+
+  document.getElementById('statusPanelTitle').textContent = label + ' (' + items.length + ')';
+  var list = document.getElementById('statusPanelList');
+  list.innerHTML = '';
+  items.forEach(function (r) {
+    var item = document.createElement('div');
+    item.className = 'status-item';
+    var sTeamDisplay = r.team || '—';
+    if (r.teamName) sTeamDisplay += ' – ' + r.teamName;
+    item.innerHTML =
+      '<div class="status-item-week">' + esc(r.week || '?') + '<small>Week</small></div>'
+      + '<div class="status-item-info">'
+      +   '<div class="status-item-sp">' + esc(r.spDescription || 'Unknown') + '</div>'
+      +   '<div class="status-item-team">Team: ' + esc(sTeamDisplay) + '</div>'
+      + '</div>';
+    list.appendChild(item);
+  });
+  panel.classList.add('visible');
+  setTimeout(function () { panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 50);
+}
+function clearStatusFilterActive() {
+  document.querySelectorAll('.status-filter-btn').forEach(function (b) { b.classList.remove('active'); });
+}
+function highlightStatusFilter(key) {
+  clearStatusFilterActive();
+  document.querySelectorAll('.status-filter-btn').forEach(function (b) {
+    if (b.getAttribute('data-status') === key) b.classList.add('active');
+  });
+}
+
+/* ── Dashboard ── */
+function renderDashboard(data) {
+  if (!data || !data.results) return;
+  allResults = data.results;
+  allSPTypes = data.allSPTypes || [];
+
+  var earnedCount = 0;
+  allResults.forEach(function (r) {
+    var key = statusFilterKey(r);
+    if (key !== 'shutout' && key !== 'duplicate') earnedCount++;
+  });
+  document.getElementById('statTotal').textContent = allResults.length;
+  document.getElementById('statEarned').textContent = earnedCount;
+
+  renderSPButtons();
+  renderStatusFilters();
+  document.getElementById('dashboard').style.display = 'block';
+}
+
+/* ── Date helpers ── */
+function weekFromDate(d) {
+  if (!d || !_sessionStart) return '';
+  var dt = new Date(d + 'T12:00:00Z');
+  var st = new Date(_sessionStart + 'T12:00:00Z');
+  if (isNaN(dt.getTime()) || isNaN(st.getTime())) return '';
+  var diff = (dt.getTime() - st.getTime()) / 86400000;
+  if (diff < -3) return '';
+  return String(Math.max(1, Math.floor(diff / 7) + 1));
+}
+function fmtMailDate(ts) {
+  if (!ts) return '';
+  var d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  var y = String(d.getUTCFullYear()).slice(-2);
+  return (d.getUTCMonth() + 1) + '/' + d.getUTCDate() + '/' + y;
+}
+
+/* ── Session loading ── */
+async function loadSessions() {
+  var sel = document.getElementById('sessionSelect');
+  try {
+    var all  = await sbGet('slate',
+      'sessions?select=id,name,start_date,is_current&order=start_date.desc');
+    var reps = await sbGet('slate',
+      'sp_reports?operator_id=eq.' + OPERATOR_ID + '&select=session_id');
+    var withData = {};
+    reps.forEach(function (r) { withData[r.session_id] = true; });
+    sessions = all.filter(function (s) { return withData[s.id]; });
+    if (!sessions.length) sessions = all;
+
+    sel.innerHTML = '';
+    sessions.forEach(function (s) {
+      var opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.name;
+      sel.appendChild(opt);
+    });
+    var def = sessions.filter(function (s) { return s.is_current; })[0] || sessions[0];
+    if (def) { sel.value = def.id; }
+  } catch (e) {
+    console.warn('[sessions] load failed', e);
+    sel.innerHTML = '<option value="">Current Session</option>';
+  }
+}
+
+async function loadSessionMeta(sessionId) {
+  /* Anything that doesn't depend on the player goes here so a player
+     search is a quick lookup + one round trip for the SP rows. */
+  currentSession = sessionId;
+  var s = sessions.filter(function (x) { return String(x.id) === String(sessionId); })[0];
+  _sessionStart = s ? s.start_date : null;
+
+  _divisions = await sbGet('slate',
+    'divisions?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
+    + '&select=id,division_number,name,format,night_of_play&order=division_number');
+  _spmDivNums = _divisions.map(function (d) { return d.division_number; });
+  _isMastersDiv = {};
+  _divisions.forEach(function (d) {
+    var fmt = (d.format || '').toLowerCase();
+    var nm  = (d.name   || '').toLowerCase();
+    _isMastersDiv[d.division_number] = (fmt.indexOf('master') >= 0 || nm.indexOf('master') >= 0);
+  });
+
+  var divIds = _divisions.map(function (d) { return d.id; });
+  _teamName = {};
+  if (divIds.length) {
+    var teams = await sbGet('slate',
+      'teams?division_id=in.(' + divIds.join(',') + ')&select=division_id,team_number,team_name');
+    var divNumById = {};
+    _divisions.forEach(function (d) { divNumById[d.id] = d.division_number; });
+    teams.forEach(function (t) {
+      var divNum = divNumById[t.division_id];
+      if (!divNum) return;
+      _teamName[divNum + '|' + parseInt(t.team_number, 10)] = t.team_name;
+    });
+  }
+
+  /* Latest cumulative ll + bd reports + the session's 8skunk report. */
+  var llRep = await sbGet('slate',
+    'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
+    + '&report_kind=eq.ll&select=id&order=uploaded_at.desc&limit=1');
+  var bdRep = await sbGet('slate',
+    'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
+    + '&report_kind=eq.bd&select=id&order=uploaded_at.desc&limit=1');
+  var skRep = await sbGet('slate',
+    'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
+    + '&report_kind=eq.8skunk&select=id&order=uploaded_at.desc&limit=1');
+  _llReportId = llRep[0] ? llRep[0].id : null;
+  _bdReportId = bdRep[0] ? bdRep[0].id : null;
+  _skReportId = skRep[0] ? skRep[0].id : null;
+}
+
+/* ── Player search ── */
+function teamDisplay(divNum, teamNum) {
+  return _teamName[divNum + '|' + parseInt(teamNum, 10)] || null;
+}
+function buildEvents(bdRows, skunks, patches) {
+  /* `patches` is already this one player's sp_patches rows, so the lookups
+     key only on (division, sp_type) for non-slam and (sp_type) for slam.
+     Each by-division row's count column N expands to N pseudo-events at
+     the same (team, sp_type); Masters divisions remap 8/x/9/n →
+     m8/mx/m9/mn. 8-Ball shutouts come from the per-event skunk feed; slam
+     patches appear once each. The first event per (division, sp_type) is
+     the one that earns the patch — the rest show as duplicates. */
+  var patchByDivSp = {};   // 'div|sp'
+  var patchBySp    = {};   // 'sp'      (slam)
+  patches.forEach(function (p) {
+    if (p.is_slam) patchBySp[p.sp_type] = p;
+    else           patchByDivSp[p.division_number + '|' + p.sp_type] = p;
+  });
+
+  var events = [];
+  bdRows.forEach(function (row) {
+    var masters = _isMastersDiv[row.division_number];
+    ['r', '8', 'x', '9', 'n', 'k'].forEach(function (code) {
+      var n = row[SP_COL[code]] || 0;
+      if (!n) return;
+      var sp = masters && MASTERS_REMAP[code] ? MASTERS_REMAP[code] : code;
+      for (var i = 0; i < n; i++) {
+        events.push({
+          sp_type: sp, division_number: row.division_number,
+          team_number: row.team_number, week: '', eventDate: null
         });
       }
+    });
+  });
+  skunks.forEach(function (sk) {
+    events.push({
+      sp_type: 's', division_number: null,
+      team_number: sk.team_number, week: weekFromDate(sk.event_date),
+      eventDate: sk.event_date
+    });
+  });
+  patches.forEach(function (p) {
+    if (!p.is_slam) return;
+    events.push({
+      sp_type: p.sp_type, division_number: null,
+      team_number: p.team_number || '', week: '', eventDate: null
+    });
+  });
 
-      /* ── Helpers ── */
+  /* Mark duplicates: 2nd+ event per (division, sp_type). Slams and
+     shutouts are never duplicates — slams are one-per-slam by definition
+     and shutouts don't have a patch concept. */
+  var seen = {};
+  events.forEach(function (e) {
+    if (e.sp_type === 's' || e.sp_type === '8m' || e.sp_type === '9m' || e.sp_type === 'g') {
+      e._dupIdx = 0; return;
+    }
+    var key = e.division_number + '|' + e.sp_type;
+    e._dupIdx = (seen[key] = (seen[key] || 0) + 1) - 1;
+  });
 
-      function esc(s) {
-        var d = document.createElement("div");
-        d.textContent = s;
-        return d.innerHTML;
+  return events.map(function (e) {
+    var label = SP_LABEL[e.sp_type] || e.sp_type;
+    var team  = e.team_number ? String(parseInt(e.team_number, 10)) : '';
+    var teamName = e.division_number ? teamDisplay(e.division_number, e.team_number) : null;
+
+    var statusDisplay;
+    if (e.sp_type === 's') {
+      statusDisplay = 'Shutout — no patch';
+    } else if (e._dupIdx > 0) {
+      statusDisplay = 'Already earned this patch';
+    } else {
+      var p = (e.sp_type === '8m' || e.sp_type === '9m' || e.sp_type === 'g')
+        ? patchBySp[e.sp_type]
+        : patchByDivSp[e.division_number + '|' + e.sp_type];
+      if (p && p.mailed_at) statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at);
+      else if (p)           statusDisplay = 'Not Yet Mailed';
+      else                  statusDisplay = 'Patch earned — will be mailed';
+    }
+
+    return { spDescription: label, week: e.week, team: team,
+             teamName: teamName, statusDisplay: statusDisplay };
+  });
+}
+
+async function handleSearch() {
+  var input = document.getElementById('memberInput');
+  var raw = (input.value || '').trim();
+  var sessionId = parseInt(document.getElementById('sessionSelect').value, 10);
+
+  showMessage(null, '');
+  clearDashboard();
+
+  if (!raw) {
+    showMessage('error', 'Enter your APA # or email address.');
+    input.focus();
+    return;
+  }
+  if (!sessionId) {
+    showMessage('error', 'Select a session first.');
+    return;
+  }
+
+  setLoading(true);
+  try {
+    if (sessionId !== currentSession) await loadSessionMeta(sessionId);
+
+    var lookup = await sbRpc('slate', 'ss_player_lookup',
+      { p_input: raw, p_session_id: sessionId });
+    if (!lookup || !lookup.length) {
+      showMessage('error', "Couldn't find that APA # or email.");
+      return;
+    }
+    var p = lookup[0];
+    var nk = (p.nickname || '').trim();
+    var fullName = (nk ? p.first_name + ' "' + nk + '" ' + p.last_name
+                       : p.first_name + ' ' + p.last_name)
+      .replace(/\s+/g, ' ').trim();
+    var memberShort = String(p.member_number).slice(-5);
+
+    /* Fetch this player's SPM data. */
+    var bdRows = [];
+    if (_bdReportId && _spmDivNums.length) {
+      bdRows = await sbGet('slate',
+        'sp_by_division_rows?report_id=eq.' + _bdReportId
+        + '&member_number=eq.' + encodeURIComponent(memberShort)
+        + '&division_number=in.(' + _spmDivNums.join(',') + ')'
+        + '&select=division_number,team_number,rackless,eight_ob,eight_br,nine_os,nine_br,skunk');
+    }
+    var skunks = [];
+    if (_skReportId) {
+      skunks = await sbGet('slate',
+        'sp_skunk_events?report_id=eq.' + _skReportId
+        + '&member_number=eq.' + encodeURIComponent(memberShort)
+        + '&select=event_date,team_number,team_name');
+    }
+    var patches = await sbGet('slate',
+      'sp_patches?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
+      + '&member_number=eq.' + encodeURIComponent(memberShort)
+      + '&select=member_number,division_number,team_number,sp_type,is_slam,mailed_at');
+    var results = buildEvents(bdRows, skunks, patches);
+
+    /* The buttons section should show all standard labels plus any
+       masters labels actually earned by the player. */
+    var sptypes = BASE_LABELS.slice();
+    var hasMasters = results.some(function (r) {
+      return MASTERS_LABELS.indexOf(r.spDescription) >= 0;
+    });
+    if (hasMasters) sptypes = MASTERS_LABELS.concat(sptypes);
+
+    showMemberPill(memberShort + ' · ' + fullName);
+    renderDashboard({ results: results, allSPTypes: sptypes });
+
+    try { sessionStorage.setItem('patchcheck_lastInput', raw); } catch (e) {}
+  } catch (e) {
+    console.error('[search] failed', e);
+    showMessage('error', 'Something went wrong. Try again.');
+  } finally {
+    setLoading(false);
+    input.value = '';
+    input.focus();
+  }
+}
+
+/* ── Auto-update — poll apa_core.apps for a version bump ── */
+var _updating = false;
+async function checkVersion() {
+  if (_updating) return;
+  try {
+    var rows = await sbGet('apa_core',
+      'apps?app_name=eq.' + APP_NAME + '&select=version');
+    var remote = rows && rows[0] && rows[0].version;
+    if (remote && remote !== APP_VERSION) showUpdateOverlay(remote);
+  } catch (e) {}
+}
+function showUpdateOverlay(target) {
+  if (_updating) return;
+  _updating = true;
+  var ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(17,17,17,0.94);'
+    + 'display:flex;align-items:center;justify-content:center;'
+    + 'font-family:system-ui,-apple-system,sans-serif;color:#fff;text-align:center;padding:24px;';
+  ov.innerHTML = '<div><div style="font-size:34px;font-weight:900;font-style:italic;color:#ea002a;margin-bottom:14px;">PatchCheck</div>'
+    + '<div style="font-size:16px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:#9db4ff;">Updating…</div>'
+    + '<div style="font-size:13px;color:#aaa;margin-top:10px;">A new version is live. One moment.</div></div>';
+  document.body.appendChild(ov);
+  pollForDeploy(target);
+}
+function pollForDeploy(target) {
+  fetch(location.pathname + '?cb=' + Date.now(), { cache: 'no-store' })
+    .then(function (r) { return r.text(); })
+    .then(function (html) {
+      if (html.indexOf("APP_VERSION = '" + target + "'") !== -1) {
+        location.replace(location.pathname + '?cb=' + Date.now());
+      } else {
+        setTimeout(function () { pollForDeploy(target); }, 3000);
       }
+    })
+    .catch(function () { setTimeout(function () { pollForDeploy(target); }, 3000); });
+}
 
-      function setStatus(t) {
-        document.getElementById("statusText").textContent = t || "";
+/* ── Live data refresh ── */
+async function pollData() {
+  if (_updating || !currentSession) return;
+  try {
+    var reps = await sbGet('slate',
+      'sp_reports?session_id=eq.' + currentSession + '&operator_id=eq.' + OPERATOR_ID
+      + '&select=id,uploaded_at&order=uploaded_at.desc&limit=1');
+    var stamp = reps && reps[0] ? (reps[0].id + '|' + reps[0].uploaded_at) : '';
+    if (stamp && lastReportStamp && stamp !== lastReportStamp) {
+      /* Reload session metadata; if a member search is active, re-run it. */
+      await loadSessionMeta(currentSession);
+      var saved = '';
+      try { saved = sessionStorage.getItem('patchcheck_lastInput') || ''; } catch (e) {}
+      if (saved && document.getElementById('dashboard').style.display !== 'none') {
+        document.getElementById('memberInput').value = saved;
+        handleSearch();
       }
+    }
+    if (stamp) lastReportStamp = stamp;
+  } catch (e) {}
+}
+
+/* ── Footer ── */
+function renderFooter() {
+  var f = document.getElementById('appFooter');
+  if (f) f.textContent = APP_NAME + ' v' + APP_VERSION + ' · South Portland Metro APA';
+}
+
+/* ── Init ── */
+document.addEventListener('DOMContentLoaded', async function () {
+  renderFooter();
+  document.body.style.visibility = 'visible';
+
+  var form  = document.getElementById('searchForm');
+  var input = document.getElementById('memberInput');
+
+  form.addEventListener('submit', function (e) { e.preventDefault(); handleSearch(); });
+  /* iOS numeric keyboard "Done" fires blur, not submit. */
+  input.addEventListener('blur', function () {
+    var v = input.value.trim();
+    if (v && !document.getElementById('goButton').disabled) handleSearch();
+  });
+  document.getElementById('sessionSelect').addEventListener('change', function () {
+    var id = parseInt(this.value, 10);
+    if (isNaN(id)) return;
+    if (allResults.length) {
+      /* If a player is already displayed, re-run the search against the
+         new session so the dashboard rolls over without a manual reload. */
+      var saved = '';
+      try { saved = sessionStorage.getItem('patchcheck_lastInput') || ''; } catch (e) {}
+      if (saved) { input.value = saved; loadSessionMeta(id).then(handleSearch); return; }
+    }
+    loadSessionMeta(id);
+  });
+
+  await loadSessions();
+  var sel = document.getElementById('sessionSelect');
+  var initial = parseInt(sel.value, 10);
+  if (!isNaN(initial)) await loadSessionMeta(initial);
+
+  try {
+    var reps = await sbGet('slate',
+      'sp_reports?session_id=eq.' + currentSession + '&operator_id=eq.' + OPERATOR_ID
+      + '&select=id,uploaded_at&order=uploaded_at.desc&limit=1');
+    if (reps && reps[0]) lastReportStamp = reps[0].id + '|' + reps[0].uploaded_at;
+  } catch (e) {}
+
+  /* Auto-lookup the saved player on return. */
+  var saved = null;
+  try { saved = sessionStorage.getItem('patchcheck_lastInput'); } catch (e) {}
+  if (saved) { input.value = saved; handleSearch(); }
+  else input.focus();
+
+  setInterval(checkVersion, 30000);
+  setInterval(pollData, 30000);
+  checkVersion();
+});
 
-      function setLoading(on) {
-        var btn = document.getElementById("goButton");
-        btn.disabled = on;
-        btn.textContent = on ? "SEARCHING..." : "SEARCH";
-      }
-
-      function showMessage(type, text) {
-        var c = document.getElementById("messageContainer");
-        c.innerHTML = "";
-        if (!text) return;
-        var d = document.createElement("div");
-        d.className = "msg " + (type === "error" ? "msg-error" : "msg-info");
-        d.textContent = text;
-        c.appendChild(d);
-      }
-
-      function showMemberPill(name) {
-        var pill = document.getElementById("memberPill");
-        if (!name) {
-          pill.style.display = "none";
-          pill.textContent = "";
-          return;
-        }
-        pill.textContent = name;
-        pill.style.display = "block";
-      }
-
-      function clearDashboard() {
-        showMemberPill("");
-        document.getElementById("dashboard").style.display = "none";
-        document.getElementById("spButtonSection").innerHTML = "";
-        document.getElementById("detailPanel").classList.remove("visible");
-        document.getElementById("detailList").innerHTML = "";
-        document.getElementById("statusFilterRow").innerHTML = "";
-        document.getElementById("statusPanel").classList.remove("visible");
-        document.getElementById("statusPanelList").innerHTML = "";
-        allResults = [];
-        allSPTypes = [];
-        activeSpType = null;
-        activeStatusFilter = null;
-      }
-
-      /* ── Classify status for CSS ── */
-
-      function statusClass(r) {
-        var disp = (r.statusDisplay || "").toLowerCase();
-        if (disp.indexOf("shutout") !== -1) return "shutout";
-        if (disp.indexOf("already earned") !== -1) return "duplicate";
-        if (disp.indexOf("mail") !== -1 && disp.indexOf("not yet") === -1) return "mailed";
-        return "pending";
-      }
-
-      /* ── Determine the status filter key for grouping ── */
-
-      function statusFilterKey(r) {
-        var disp = (r.statusDisplay || "").toLowerCase();
-        if (disp.indexOf("shutout") !== -1) return "shutout";
-        if (disp.indexOf("already earned") !== -1) return "duplicate";
-        if (disp.indexOf("mail") !== -1 && disp.indexOf("not yet") === -1) return "mailed";
-        return "pending";
-      }
-
-      /* ── Is this a slam type? ── */
-
-      var SLAMS = {
-        "8 Ball Mini-Slam": true,
-        "9 Ball Mini-Slam": true,
-        "Grand Slam": true
-      };
-
-      /**
-       * Maps rackless to its parent shutout type.
-       */
-      function getShutoutParent(label) {
-        if (label === "8 Ball Rackless") return "8 Ball Shutouts";
-        return null;
-      }
-
-      function isShutoutType(label) {
-        return label === "8 Ball Shutouts";
-      }
-
-      /* ── Categorize an SP description ── */
-
-      function categorize(label) {
-        var l = label.toLowerCase();
-        if (l.indexOf("grand slam") !== -1) return "Grand Slam";
-        if (l.indexOf("mini-slam") !== -1 || l.indexOf("mini slam") !== -1) {
-          return "Mini-Slam";
-        }
-        if (l.indexOf("8") !== -1) return "8-Ball";
-        if (l.indexOf("9") !== -1) return "9-Ball";
-        return "Other";
-      }
-
-      var CATEGORY_ORDER = ["8-Ball", "9-Ball", "Mini-Slam", "Grand Slam", "Other"];
-
-      /* ── Render SP type buttons grouped by category ── */
-
-      function renderSPButtons() {
-        var section = document.getElementById("spButtonSection");
-        section.innerHTML = "";
-
-        var earnedMap = {};
-        allResults.forEach(function (r) {
-          var label = r.spDescription || "Unknown";
-          if (!earnedMap[label]) earnedMap[label] = [];
-          earnedMap[label].push(r);
-        });
-
-        var shutoutBadgeCounts = {};
-        allResults.forEach(function (r) {
-          var parent = getShutoutParent(r.spDescription);
-          if (parent) {
-            shutoutBadgeCounts[parent] = (shutoutBadgeCounts[parent] || 0) + 1;
-          }
-        });
-
-        var typeOrder = [];
-        allSPTypes.forEach(function (label) {
-          if (typeOrder.indexOf(label) === -1) typeOrder.push(label);
-        });
-        Object.keys(earnedMap).forEach(function (label) {
-          if (typeOrder.indexOf(label) === -1) typeOrder.push(label);
-        });
-
-        var categoryMap = {};
-        typeOrder.forEach(function (label) {
-          var cat = categorize(label);
-          if (!categoryMap[cat]) categoryMap[cat] = [];
-          categoryMap[cat].push(label);
-        });
-
-        CATEGORY_ORDER.forEach(function (cat) {
-          var types = categoryMap[cat];
-          if (!types || !types.length) return;
-
-          var group = document.createElement("div");
-          group.className = "sp-category";
-
-          var row = document.createElement("div");
-          row.className = "sp-buttons";
-
-          types.forEach(function (label) {
-            var items = earnedMap[label] || [];
-            var racklessCount = (isShutoutType(label) && shutoutBadgeCounts[label]) ? shutoutBadgeCounts[label] : 0;
-            var badgeCount = items.length + racklessCount;
-            var isEarned = badgeCount > 0;
-            var isSlam = SLAMS[label] || false;
-
-            var btn = document.createElement("span");
-            btn.className = "sp-btn " + (isEarned ? "earned" : "not-earned");
-            btn.setAttribute("data-sp", label);
-
-            var badgeText;
-            if (!isEarned) {
-              badgeText = "\u2715";
-            } else if (isSlam) {
-              badgeText = "\u2713";
-            } else {
-              badgeText = String(badgeCount);
-            }
-
-            btn.innerHTML = esc(label) + ' <span class="badge">' + badgeText + "</span>" +
-              (isEarned ? ' <span class="chevron">\u203A</span>' : "");
-
-            if (isEarned) {
-              btn.addEventListener("click", function () {
-                toggleSPDetail(label);
-              });
-            }
-
-            row.appendChild(btn);
-          });
-
-          group.appendChild(row);
-          section.appendChild(group);
-        });
-      }
-
-      /* ── Toggle SP detail panel ── */
-
-      function toggleSPDetail(label) {
-        var panel = document.getElementById("detailPanel");
-
-        activeStatusFilter = null;
-        document.getElementById("statusPanel").classList.remove("visible");
-        clearStatusFilterActive();
-
-        if (activeSpType === label) {
-          activeSpType = null;
-          panel.classList.remove("visible");
-          clearSpButtonActive();
-          return;
-        }
-
-        activeSpType = label;
-        highlightSpButton(label);
-
-        var items = allResults.filter(function (r) {
-          if (r.spDescription === label) return true;
-          if (isShutoutType(label)) {
-            var parent = getShutoutParent(r.spDescription);
-            return parent === label;
-          }
-          return false;
-        });
-
-        items.sort(function (a, b) {
-          var wa = parseInt(a.week, 10), wb = parseInt(b.week, 10);
-          if (isNaN(wa)) return 1;
-          if (isNaN(wb)) return -1;
-          return wa - wb;
-        });
-
-        document.getElementById("detailTitle").textContent = label;
-        var list = document.getElementById("detailList");
-        list.innerHTML = "";
-
-        var hasMixed = items.some(function (r) { return r.spDescription !== label; });
-
-        items.forEach(function (r) {
-          var item = document.createElement("div");
-          item.className = "detail-item";
-
-          var sc = statusClass(r);
-
-          var typeNote = "";
-          if (hasMixed && r.spDescription !== label) {
-            typeNote = '<div class="detail-type-note">' + esc(r.spDescription) + "</div>";
-          }
-
-          var teamDisplay = r.team || "\u2014";
-          if (r.teamName) teamDisplay += " \u2013 " + r.teamName;
-
-          item.innerHTML =
-            '<div class="detail-week">' +
-              esc(r.week || "?") +
-              "<small>Week</small>" +
-            "</div>" +
-            '<div class="detail-info">' +
-              '<div class="detail-team">' + esc(teamDisplay) + "</div>" +
-              typeNote +
-              '<span class="detail-status status-' + sc + '">' +
-                esc(r.statusDisplay || "Pending") +
-              "</span>" +
-            "</div>";
-
-          list.appendChild(item);
-        });
-
-        panel.classList.add("visible");
-
-        setTimeout(function () {
-          panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        }, 50);
-      }
-
-      function clearSpButtonActive() {
-        var btns = document.querySelectorAll(".sp-btn");
-        btns.forEach(function (b) { b.classList.remove("active"); });
-      }
-
-      function highlightSpButton(label) {
-        clearSpButtonActive();
-        var btns = document.querySelectorAll(".sp-btn.earned");
-        btns.forEach(function (b) {
-          if (b.getAttribute("data-sp") === label) {
-            b.classList.add("active");
-          }
-        });
-      }
-
-      /* ── Render status filter buttons ── */
-
-      function renderStatusFilters() {
-        var section = document.getElementById("statusFilterSection");
-        var row = document.getElementById("statusFilterRow");
-        row.innerHTML = "";
-
-        if (!allResults.length) {
-          section.style.display = "none";
-          return;
-        }
-        section.style.display = "";
-
-        var counts = {};
-        allResults.forEach(function (r) {
-          var key = statusFilterKey(r);
-          counts[key] = (counts[key] || 0) + 1;
-        });
-
-        var filters = [
-          { key: "pending",   label: "Not Yet Mailed" },
-          { key: "mailed",    label: "Mailed" },
-          { key: "shutout",   label: "Shutout" },
-          { key: "duplicate", label: "Duplicate" }
-        ];
-
-        filters.forEach(function (f) {
-          var count = counts[f.key] || 0;
-          if (count === 0) return;
-
-          var btn = document.createElement("span");
-          btn.className = "status-filter-btn";
-          btn.setAttribute("data-status", f.key);
-
-          btn.innerHTML = esc(f.label) +
-            ' <span class="filter-count">' + count + "</span>" +
-            ' <span class="chevron">\u203A</span>';
-
-          btn.addEventListener("click", function () {
-            toggleStatusFilter(f.key, f.label);
-          });
-
-          row.appendChild(btn);
-        });
-      }
-
-      /* ── Toggle status filter panel ── */
-
-      function toggleStatusFilter(key, label) {
-        var panel = document.getElementById("statusPanel");
-
-        activeSpType = null;
-        document.getElementById("detailPanel").classList.remove("visible");
-        clearSpButtonActive();
-
-        if (activeStatusFilter === key) {
-          activeStatusFilter = null;
-          panel.classList.remove("visible");
-          clearStatusFilterActive();
-          return;
-        }
-
-        activeStatusFilter = key;
-        highlightStatusFilter(key);
-
-        var items = allResults.filter(function (r) {
-          return statusFilterKey(r) === key;
-        });
-
-        items.sort(function (a, b) {
-          var wa = parseInt(a.week, 10), wb = parseInt(b.week, 10);
-          if (isNaN(wa)) return 1;
-          if (isNaN(wb)) return -1;
-          return wa - wb;
-        });
-
-        document.getElementById("statusPanelTitle").textContent = label + " (" + items.length + ")";
-        var list = document.getElementById("statusPanelList");
-        list.innerHTML = "";
-
-        items.forEach(function (r) {
-          var item = document.createElement("div");
-          item.className = "status-item";
-
-          var sTeamDisplay = r.team || "\u2014";
-          if (r.teamName) sTeamDisplay += " \u2013 " + r.teamName;
-
-          item.innerHTML =
-            '<div class="status-item-week">' +
-              esc(r.week || "?") +
-              "<small>Week</small>" +
-            "</div>" +
-            '<div class="status-item-info">' +
-              '<div class="status-item-sp">' + esc(r.spDescription || "Unknown") + "</div>" +
-              '<div class="status-item-team">Team: ' + esc(sTeamDisplay) + "</div>" +
-            "</div>";
-
-          list.appendChild(item);
-        });
-
-        panel.classList.add("visible");
-
-        setTimeout(function () {
-          panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        }, 50);
-      }
-
-      function clearStatusFilterActive() {
-        var btns = document.querySelectorAll(".status-filter-btn");
-        btns.forEach(function (b) { b.classList.remove("active"); });
-      }
-
-      function highlightStatusFilter(key) {
-        clearStatusFilterActive();
-        var btns = document.querySelectorAll(".status-filter-btn");
-        btns.forEach(function (b) {
-          if (b.getAttribute("data-status") === key) {
-            b.classList.add("active");
-          }
-        });
-      }
-
-      /* ── Render full dashboard ── */
-
-      function renderDashboard(data) {
-        if (!data || !data.results) return;
-
-        allResults = data.results;
-        allSPTypes = data.allSPTypes || [];
-
-        var earnedCount = 0;
-        allResults.forEach(function (r) {
-          var key = statusFilterKey(r);
-          if (key !== "shutout" && key !== "duplicate") {
-            earnedCount++;
-          }
-        });
-
-        document.getElementById("statTotal").textContent = allResults.length;
-        document.getElementById("statEarned").textContent = earnedCount;
-
-        renderSPButtons();
-        renderStatusFilters();
-
-        document.getElementById("dashboard").style.display = "block";
-      }
-
-      /* ── Load sessions dropdown ── */
-
-      function loadSessions() {
-        callServer('getSessions').then(function (sessions) {
-          var sel = document.getElementById("sessionSelect");
-          sel.innerHTML = "";
-          if (!sessions || !sessions.length) {
-            sel.innerHTML = '<option value="0">Current Session</option>';
-            return;
-          }
-          sessions.forEach(function (s) {
-            var opt = document.createElement("option");
-            opt.value = s.index;
-            opt.textContent = s.name;
-            sel.appendChild(opt);
-          });
-        }).catch(function () {
-          var sel = document.getElementById("sessionSelect");
-          sel.innerHTML = '<option value="0">Current Session</option>';
-        });
-      }
-
-      /* ── Search handler ── */
-
-      async function handleSearch() {
-        var input = document.getElementById("memberInput");
-        var raw = input.value || "";
-        var sessionIndex = document.getElementById("sessionSelect").value;
-
-        showMessage(null, "");
-        clearDashboard();
-
-        if (!raw.trim()) {
-          showMessage("error", "Enter your APA # or email address.");
-          input.focus();
-          return;
-        }
-
-        setLoading(true);
-
-        try {
-          var data = await callServer('searchSpecialPerformances', {
-            memberNumber: raw,
-            sessionIndex: sessionIndex
-          });
-
-          if (!data || data.success === false) {
-            showMessage("error", (data && data.error) || "Something went wrong.");
-            setStatus("");
-          } else {
-            showMessage(null, "");
-            setStatus("");
-            var pillText = (data.member || "") +
-              (data.member && data.name ? " \u00B7 " : "") +
-              (data.name || "");
-            showMemberPill(pillText);
-            renderDashboard(data);
-
-            // Remember input for auto-lookup on return
-            try { sessionStorage.setItem('patchcheck_lastInput', raw.trim()); } catch (e) {}
-          }
-        } catch (err) {
-          showMessage("error", "Something went wrong. Try again.");
-          setStatus("");
-        } finally {
-          setLoading(false);
-          input.value = "";
-          input.focus();
-        }
-      }
-
-      /* ── Init ── */
-
-      document.addEventListener("DOMContentLoaded", async function () {
-        var form = document.getElementById("searchForm");
-        var input = document.getElementById("memberInput");
-
-        // ── Maintenance mode check ──────────────────────────────────
-        try {
-          var maintResp = await fetch(API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify({ action: 'getMaintenanceMode' }),
-            redirect: 'follow'
-          }).then(function(r) { return r.json(); });
-
-          if (maintResp.success && maintResp.enabled) {
-            var urlParams = new URLSearchParams(window.location.search);
-            var bypassKey = urlParams.get('key') || '';
-            if (bypassKey !== maintResp.bypassKey) {
-              // Show maintenance page and halt
-              document.body.innerHTML = '';
-              document.body.style.cssText = 'margin:0;padding:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100svh;font-family:system-ui,-apple-system,sans-serif;';
-              var box = document.createElement('div');
-              box.style.cssText = 'text-align:center;padding:48px 24px;max-width:500px;';
-              box.innerHTML = '<div style="font-size:48px;font-weight:900;font-style:italic;color:#ea002a;line-height:1.1;margin-bottom:24px;">PatchCheck</div>'
-                + '<div style="font-size:20px;font-weight:600;color:#0031a1;text-transform:uppercase;letter-spacing:0.15em;margin-bottom:16px;">Under Maintenance</div>'
-                + '<div style="font-size:15px;color:#888;line-height:1.6;">We\'re making improvements.<br>Check back shortly.</div>';
-              document.body.appendChild(box);
-              document.body.style.visibility = 'visible';
-              return; // Stop all further initialization
-            }
-          }
-        } catch (e) {
-          // Fail open - don't block users if maintenance check fails
-        }
-
-        // ── Maintenance check passed - reveal the page ──────────────
-        document.body.style.visibility = 'visible';
-
-        form.addEventListener("submit", function (e) {
-          e.preventDefault();
-          handleSearch();
-        });
-
-        // iOS numeric keyboard "Done" fires blur, not submit
-        input.addEventListener("blur", function () {
-          var v = input.value.trim();
-          if (v && !document.getElementById("goButton").disabled) {
-            handleSearch();
-          }
-        });
-
-        loadSessions();
-
-        // Auto-lookup from sessionStorage (returning user)
-        try {
-          var lastInput = sessionStorage.getItem('patchcheck_lastInput');
-          if (lastInput) {
-            input.value = lastInput;
-            handleSearch();
-          } else {
-            input.focus();
-          }
-        } catch (e) {
-          input.focus();
-        }
-      });
     </script>
   </body>
 </html>
