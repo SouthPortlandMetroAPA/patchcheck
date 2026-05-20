@@ -962,7 +962,7 @@
 
 /* ── App identity ── */
 const APP_NAME    = 'PatchCheck';
-const APP_VERSION = '1.4';
+const APP_VERSION = '1.5';
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -1240,7 +1240,7 @@ function toggleSPDetail(label) {
     var teamDisplay = r.team || '—';
     if (r.teamName) teamDisplay += ' – ' + r.teamName;
     item.innerHTML =
-      '<div class="detail-week">' + esc(r.week || '?') + '<small>Week</small></div>'
+      ''  /* week indicator removed v1.5 — slate data is per-type, not per-event for most codes */
       + '<div class="detail-info">'
       +   '<div class="detail-team">' + esc(teamDisplay) + '</div>'
       +   typeNote
@@ -1327,7 +1327,7 @@ function toggleStatusFilter(key, label) {
     var sTeamDisplay = r.team || '—';
     if (r.teamName) sTeamDisplay += ' – ' + r.teamName;
     item.innerHTML =
-      '<div class="status-item-week">' + esc(r.week || '?') + '<small>Week</small></div>'
+      ''  /* week indicator removed v1.5 */
       + '<div class="status-item-info">'
       +   '<div class="status-item-sp">' + esc(r.spDescription || 'Unknown') + '</div>'
       +   '<div class="status-item-team">Team: ' + esc(sTeamDisplay) + '</div>'
