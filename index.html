@@ -962,7 +962,7 @@
 
 /* ── App identity ── */
 const APP_NAME    = 'PatchCheck';
-const APP_VERSION = '1.3';
+const APP_VERSION = '1.4';
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -1450,23 +1450,28 @@ async function loadSessionMeta(sessionId) {
     + '&report_kind=eq.ll&select=id&order=uploaded_at.desc&limit=1');
   var bdRep = await sbGet('slate',
     'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
-    + '&report_kind=eq.bd&select=id,source_printed_at&order=uploaded_at.desc&limit=1');
+    + '&report_kind=eq.bd&select=id,source_printed_at,data_through&order=uploaded_at.desc&limit=1');
   var skRep = await sbGet('slate',
     'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
     + '&report_kind=eq.8skunk&select=id&order=uploaded_at.desc&limit=1');
   _llReportId = llRep[0] ? llRep[0].id : null;
   _bdReportId = bdRep[0] ? bdRep[0].id : null;
   _skReportId = skRep[0] ? skRep[0].id : null;
-  _reportPrintedAt = (bdRep[0] && bdRep[0].source_printed_at) || '';
+  /* Prefer the operator's "data through" date; fall back to the report's
+     auto-extracted print timestamp. */
+  _reportPrintedAt = (bdRep[0] && (bdRep[0].data_through || bdRep[0].source_printed_at)) || '';
   renderReportInfo();
 }
 
-/* "Report printed 5/19/2026 5:36 PM" — drops the seconds and inserts a
-   space before AM/PM so the timestamp from sp_reports.source_printed_at
-   reads cleanly. Source format example: "5/19/2026 5:36:19PM". */
+/* Format the "Last updated" line. Two upstream shapes:
+     - data_through (date column): "YYYY-MM-DD" → "M/D/YYYY"
+     - source_printed_at (text):   "5/19/2026 5:36:19PM" → "5/19/2026 5:36 PM" */
 function formatPrintedAt(raw) {
   if (!raw) return '';
-  return String(raw).trim().replace(/(\d):\d\d\s*([AP]M)/i, '$1 $2');
+  var s = String(raw).trim();
+  var iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return parseInt(iso[2], 10) + '/' + parseInt(iso[3], 10) + '/' + iso[1];
+  return s.replace(/(\d):\d\d\s*([AP]M)/i, '$1 $2');
 }
 function renderReportInfo() {
   var el = document.getElementById('reportInfo');
