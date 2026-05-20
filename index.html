@@ -962,7 +962,7 @@
 
 /* ── App identity ── */
 const APP_NAME    = 'PatchCheck';
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.3';
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -1484,7 +1484,8 @@ function renderReportInfo() {
 function teamDisplay(divNum, teamNum) {
   return _teamName[divNum + '|' + parseInt(teamNum, 10)] || null;
 }
-function buildEvents(bdRows, skunks, patches) {
+function buildEvents(bdRows, skunks, patches, optoutTypes) {
+  optoutTypes = optoutTypes || new Set();
   /* `patches` is already this one player's sp_patches rows, so the lookups
      key only on (division, sp_type) for non-slam and (sp_type) for slam.
      Each by-division row's count column N expands to N pseudo-events at
@@ -1555,9 +1556,10 @@ function buildEvents(bdRows, skunks, patches) {
       var p = (e.sp_type === '8m' || e.sp_type === '9m' || e.sp_type === 'g')
         ? patchBySp[e.sp_type]
         : patchByDivSp[e.division_number + '|' + e.sp_type];
-      if (p && p.mailed_at) statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at);
-      else if (p)           statusDisplay = 'Not Yet Mailed';
-      else                  statusDisplay = 'Patch earned — will be mailed';
+      if (p && p.mailed_at)             statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at);
+      else if (p)                       statusDisplay = 'Not Yet Mailed';
+      else if (optoutTypes.has(e.sp_type)) statusDisplay = 'Opted out — not mailed';
+      else                              statusDisplay = 'Patch earned — will be mailed';
     }
 
     return { spDescription: label, week: e.week, team: team,
@@ -1620,7 +1622,14 @@ async function handleSearch() {
       'sp_patches?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
       + '&member_number=eq.' + encodeURIComponent(memberShort)
       + '&select=member_number,division_number,team_number,sp_type,is_slam,mailed_at');
-    var results = buildEvents(bdRows, skunks, patches);
+    /* Opt-outs for this player so "will be mailed" doesn't get shown for
+       SP codes the player has explicitly opted out of. */
+    var optoutRow = await sbGet('slate',
+      'patch_optouts?member_number=eq.' + encodeURIComponent(memberShort)
+      + '&select=opted_out_types');
+    var optoutTypes = (optoutRow && optoutRow[0] && optoutRow[0].opted_out_types)
+      ? new Set(optoutRow[0].opted_out_types) : new Set();
+    var results = buildEvents(bdRows, skunks, patches, optoutTypes);
 
     /* The buttons section should show all standard labels plus any
        masters labels actually earned by the player. */
