@@ -1,0 +1,278 @@
+<!doctype html>
+<!--
+  SPRING 2026 — Outstanding Achievement Certificate (CANONICAL TEMPLATE)
+  ─────────────────────────────────────────────────────────────────────
+  Theme: full-page cherry blossom watermark + cream radial vignette.
+  No SVG corner art, no petal scatter — just the watermark + typography.
+
+  Layer stack (under the text):
+    z=0  .watermark   — Wikimedia "Sakura 2" photo, opacity 0.22, slight
+                        desaturate + blur for atmospheric softness
+    z=1  .vignette    — radial cream wash, denser at center (max text
+                        readability), fading toward edges (watermark shows)
+    z=5  all text     — title, name, achievement, presenter, sigs
+    z=6  apa-logo, credit
+
+  Why multi-layer fade vs single low-opacity:
+    Single opacity = uniformly faded full image. Multi-layer keeps the
+    pink-blossom areas readable while dark/branch areas don't compete
+    with text. Radial cream wash also pushes focal weight toward page
+    center where the recipient name lives.
+
+  Tokens (substitute before rendering):
+    {{PLAYER_FIRST}}     First name
+    {{PLAYER_LAST}}      Last name
+    {{ACH_QUANTITY}}     e.g. "One (1)"
+    {{ACH_TYPE}}         e.g. "8 Ball Break &amp; Run"
+    {{TEAM_NAME}}        e.g. "Cue Crew"
+    {{DIVISION_NAME}}    e.g. "Evergreen" (the word "Division" is templated)
+    {{SESSION}}          e.g. "2026 Spring Session"
+    {{DATE}}             e.g. "June 7, 2026"
+    {{APA_LOGO_DATAURI}} Inline data: URI for the APA logo PNG
+    {{WATERMARK_DATAURI}}   Inline data: URI for the Sakura 2 watermark JPG
+
+  Static (do NOT replace at render time):
+    Title: "Outstanding Achievement"
+    Presenter:  "OPAL/APA Pool League" + "South Portland Metro APA"
+    Signers:    "Michelle &amp; Paul Soldan" (League Managers)
+                "Merle &amp; Boomer Humphreys" (League Operators)
+    Credit:     "Sakura 2" by Marie-Sophie Mejan, CC BY 4.0 (Wikimedia)
+
+  Asset sources:
+    sakura-assets/sakura-2-datauri.txt — base64 of resized Sakura 2 photo
+    apa-logo-datauri.txt               — base64 of APA logo
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Outstanding Achievement — Spring 2026</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pinyon+Script&family=Italianno&display=swap" rel="stylesheet">
+  <style>
+    @page { size: letter; margin: 0; }
+    * { box-sizing: border-box; }
+    html, body {
+      width: 8.5in; height: 11in;
+      margin: 0; padding: 0;
+      background: #ffffff; color: #1a1410;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      overflow: hidden;
+      font-family: Georgia, "Times New Roman", serif;
+    }
+    :root { --red: #a8132e; --gold: #c9a159; }
+
+    .cert {
+      position: relative;
+      width: 8.5in; height: 11in;
+      overflow: hidden;
+      background: #ffffff;
+    }
+
+    /* ── LAYER 1: the photo watermark ──────────────────────────────────
+       Opacity 0.22 + filter desaturate + tiny blur. The blur smooths the
+       image into a "watercolor wash" feel rather than a photo. ── */
+    .watermark {
+      position: absolute; inset: 0;
+      background-image: url('{{WATERMARK_DATAURI}}');
+      background-size: cover;
+      background-position: center 20%;
+      opacity: 0.22;
+      filter: saturate(0.85) brightness(1.10) blur(0.5px);
+      z-index: 0;
+    }
+
+    /* ── LAYER 2: cream radial wash ────────────────────────────────────
+       Pushes the image further toward background, brightens the center
+       where the recipient name sits (max readability where it matters
+       most), warms the page with a subtle cream tone. ── */
+    .vignette {
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(ellipse 65% 50% at 50% 45%,
+          rgba(255,250,247,0.78) 0%,
+          rgba(255,250,247,0.55) 45%,
+          rgba(255,250,247,0.25) 80%,
+          rgba(255,250,247,0)    100%),
+        linear-gradient(180deg,
+          rgba(255,252,250,0.15) 0%,
+          rgba(255,252,250,0.0)  30%,
+          rgba(255,252,250,0.0)  70%,
+          rgba(255,252,250,0.18) 100%);
+      z-index: 1;
+    }
+
+    /* (Petal scatter layer removed per feedback.) */
+
+    /* ── TITLE — Outstanding Achievement (60pt, the largest text) ────── */
+    .title {
+      position: absolute;
+      top: 0.95in;
+      left: 50%; transform: translateX(-50%);
+      width: 6.5in; text-align: center; z-index: 5;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 60pt; line-height: 0.95; font-weight: 800;
+      letter-spacing: -0.012em; color: var(--red);
+      text-shadow:
+        2px 2px 0 rgba(180, 100, 30, 0.45),
+        4px 4px 0 rgba(0, 0, 0, 0.07);
+    }
+    .title span { display: block; }
+
+    /* ── NAME — 50pt UPPERCASE recipient name ─────────────────────────── */
+    .name-block {
+      position: absolute;
+      top: 3.20in;
+      left: 50%; transform: translateX(-50%);
+      width: 8.2in; text-align: center; z-index: 5;
+      font-family: Georgia, "Times New Roman", serif;
+      text-transform: uppercase; color: #0a0807;
+    }
+    .player-first, .player-last {
+      display: block;
+      font-size: 50pt; line-height: 0.95; font-weight: 800;
+      letter-spacing: 0.07em;
+    }
+    .player-first:empty, .player-last:empty { display: none; }
+
+    /* ── ACHIEVEMENT DETAILS ───────────────────────────────────────── */
+    .achievement {
+      position: absolute;
+      top: 5.10in;
+      left: 50%; transform: translateX(-50%);
+      width: 7.0in; text-align: center; z-index: 5;
+      font-family: Georgia, "Times New Roman", serif; color: #2a221c;
+    }
+    .ach-line { font-size: 16.5pt; font-weight: 600; line-height: 1.45; }
+    .ach-session {
+      margin-top: 0.16in;
+      font-size: 22pt; font-weight: 800;
+      color: #6b3410; letter-spacing: 0.02em;
+      position: relative;
+    }
+    .ach-session::before, .ach-session::after {
+      content: ""; display: inline-block; vertical-align: middle;
+      width: 0.6in; height: 1px; margin: 0 0.18in;
+      background: linear-gradient(to right, transparent, var(--gold), transparent);
+    }
+    .ach-date {
+      margin-top: 0.10in;
+      font-size: 13pt; font-style: italic; font-weight: 500;
+      color: #7a5a32; letter-spacing: 0.04em;
+    }
+
+    /* ── PRESENTER ────────────────────────────────────────────────── */
+    .presenter {
+      position: absolute;
+      top: 6.85in;
+      left: 50%; transform: translateX(-50%);
+      width: 6.5in; text-align: center; z-index: 5;
+      font-family: Georgia, "Times New Roman", serif;
+      font-style: italic; color: var(--red);
+    }
+    .pres-label    { display: block; font-size: 14.5pt; font-weight: 600; }
+    .pres-primary  { display: block; font-size: 17pt; font-weight: 800; margin-top: 0.04in; }
+    .pres-and      { display: block; font-size: 13.5pt; font-weight: 600; margin-top: 0.03in; }
+    .pres-secondary{ display: block; font-size: 17pt; font-weight: 800; margin-top: 0.03in; }
+
+    /* ── SIGNATURES — lower-left, "signed on line" descender pull ───── */
+    .signatures {
+      position: absolute;
+      top: 8.60in; left: 1.25in;
+      width: 4.20in; z-index: 5;
+      display: flex; flex-direction: column; gap: 0.15in;
+    }
+    .sig { text-align: center; }
+    .sig-script {
+      font-family: "Edwardian Script ITC", "Pinyon Script", "Italianno",
+                   "Apple Chancery", "Lucida Calligraphy", "Brush Script MT", cursive;
+      font-size: 26pt; line-height: 1.0; color: #18130f;
+      white-space: nowrap; overflow: visible;
+    }
+    .sig-rule { height: 1px; background: #2b231d; margin: -0.05in 0 0.10in; }
+    .sig-caption {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 9pt; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; color: #2b231d;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* ── APA LOGO ────────────────────────────────────────────────── */
+    .apa-logo {
+      position: absolute;
+      bottom: 0.29in; right: 0.40in;
+      width: 1.5in; height: auto;
+      z-index: 6;
+    }
+
+    /* ── PHOTO CREDIT (CC-BY-4.0 attribution, tiny print bottom edge) ── */
+    .credit {
+      position: absolute;
+      bottom: 0.06in; left: 0.20in;
+      z-index: 6;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 5pt;
+      color: rgba(40, 30, 25, 0.40);
+      letter-spacing: 0.05em;
+    }
+  </style>
+</head>
+<body>
+
+  <main class="cert" aria-label="Outstanding Achievement Certificate">
+
+    <!-- LAYER 1: the photo watermark -->
+    <div class="watermark" aria-hidden="true"></div>
+
+    <!-- LAYER 2: cream radial vignette -->
+    <div class="vignette" aria-hidden="true"></div>
+
+    <!-- TITLE -->
+    <h1 class="title"><span>Outstanding</span><span>Achievement</span></h1>
+
+    <!-- NAME -->
+    <div class="name-block" aria-label="Recipient">
+      <span class="player-first">{{PLAYER_FIRST}}</span>
+      <span class="player-last">{{PLAYER_LAST}}</span>
+    </div>
+
+    <!-- ACHIEVEMENT -->
+    <div class="achievement" aria-label="Achievement details">
+      <div class="ach-line">{{ACH_QUANTITY}} {{ACH_TYPE}}</div>
+      <div class="ach-line">{{TEAM_NAME}} - {{DIVISION_NAME}} Division</div>
+      <div class="ach-session">{{SESSION}}</div>
+      <div class="ach-date">{{DATE}}</div>
+    </div>
+
+    <!-- PRESENTER -->
+    <div class="presenter" aria-label="Presented by">
+      <span class="pres-label">Presented by</span>
+      <span class="pres-primary">OPAL/APA Pool League</span>
+      <span class="pres-and">&amp;</span>
+      <span class="pres-secondary">South Portland Metro APA</span>
+    </div>
+
+    <!-- SIGNATURES -->
+    <aside class="signatures" aria-label="Signature block">
+      <div class="sig">
+        <div class="sig-script">Michelle &amp; Paul Soldan</div>
+        <div class="sig-rule"></div>
+        <div class="sig-caption">Michelle &amp; Paul Soldan, League Managers</div>
+      </div>
+      <div class="sig">
+        <div class="sig-script">Merle &amp; Boomer Humphreys</div>
+        <div class="sig-rule"></div>
+        <div class="sig-caption">Merle &amp; Boomer Humphreys, League Operators</div>
+      </div>
+    </aside>
+
+    <!-- APA LOGO -->
+    <img class="apa-logo" src="{{APA_LOGO_DATAURI}}" alt="APA logo">
+
+    <!-- PHOTO CREDIT (CC-BY-4.0 attribution required by license) -->
+    <div class="credit" aria-hidden="true">Watermark: "Sakura 2" by Marie-Sophie Mejan — CC BY 4.0 via Wikimedia Commons</div>
+
+  </main>
+</body>
+</html>

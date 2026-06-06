@@ -1938,11 +1938,28 @@ document.addEventListener('DOMContentLoaded', async function () {
         overflow: hidden;
         box-shadow: 0 6px 18px rgba(0,0,0,0.36);
       }
-      .cert-card img {
-        display: block;
+      /* Iframe lives at its native print size (8.5"×11" or 11"×8.5") inside
+         a CSS-scaled wrapper so the preview fits the card width while keeping
+         pixel-perfect fidelity to print. The wrapper enforces the card's
+         aspect ratio via padding-bottom (no JS measuring). */
+      .cert-iframe-wrap {
+        position: relative;
         width: 100%;
-        height: auto;
+        overflow: hidden;
+        background: #fff;
       }
+      .cert-iframe-wrap.portrait  { padding-bottom: 129.41%; /* 11/8.5 */ }
+      .cert-iframe-wrap.landscape { padding-bottom: 77.27%;  /*  8.5/11 */ }
+      .cert-iframe-wrap iframe.cert-iframe {
+        position: absolute; top: 0; left: 0;
+        transform-origin: top left;
+        /* native px = inches × 96. Scale on the fly via CSS calc so the
+           iframe always fills the wrapper width regardless of viewport. */
+      }
+      .cert-iframe-wrap.portrait  iframe.cert-iframe { width: 816px;  height: 1056px; }
+      .cert-iframe-wrap.landscape iframe.cert-iframe { width: 1056px; height:  816px; }
+      /* JS sets --cert-scale per wrapper after layout (wrap.clientWidth / nativeWidth). */
+      .cert-iframe-wrap iframe.cert-iframe { transform: scale(var(--cert-scale, 1)); }
       .cert-meta {
         padding: 8px 12px;
         font-size: 0.78rem;
@@ -1977,27 +1994,20 @@ document.addEventListener('DOMContentLoaded', async function () {
         .certs-actions-bar { position: sticky; top: 0; z-index: 2; }
       }
 
-      /* ── Print layout: hidden until window.print() runs ── */
+      /* ── Print layout: hidden until window.print() runs. The print root
+             holds one cert-print-page per cert. Each page contains an iframe
+             at native page size (8.5×11 portrait or 11×8.5 landscape). The
+             browser routes each page to the correct @page rule by named
+             page (cert-portrait vs cert-landscape). ── */
       .certs-print-root { display: none; }
       @media print {
         body * { visibility: hidden; }
-        .certs-print-root,
-        .certs-print-root * { visibility: visible; }
-        .certs-print-root {
-          display: block !important;
-          position: absolute; inset: 0;
-        }
-        .cert-print-page {
-          page-break-after: always;
-          width: 100%;
-        }
-        .cert-print-page img {
-          width: 100%;
-          height: auto;
-          display: block;
-        }
-        .cert-print-page.portrait  { page: cert-portrait;  }
-        .cert-print-page.landscape { page: cert-landscape; }
+        .certs-print-root, .certs-print-root * { visibility: visible; }
+        .certs-print-root { display: block !important; position: absolute; inset: 0; }
+        .cert-print-page { page-break-after: always; }
+        .cert-print-page iframe.cert-iframe { transform: none !important; border: 0; display: block; }
+        .cert-print-page.portrait  { page: cert-portrait;  width: 8.5in; height: 11in;  }
+        .cert-print-page.landscape { page: cert-landscape; width: 11in;  height: 8.5in; }
         @page cert-portrait  { size: letter portrait;  margin: 0; }
         @page cert-landscape { size: letter landscape; margin: 0; }
       }
@@ -2022,131 +2032,317 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     <script>
 /* ══════════════════════════════════════════════════════════════════════
-   CERTIFICATES — overlay UI + worker integration
+   CERTIFICATES — client-side render (no worker, no R2)
+   ──────────────────────────────────────────────────────────────────────
+   Each player renders only their own ~handful of certs from the HTML
+   templates served alongside this app at ./cert-templates/. Data comes
+   from two Supabase RPCs (slate.player_cert_sessions, slate.player_certs)
+   that key on the resolved member_number (NOT the raw search box —
+   email lookups would otherwise break).
+
+   • CTA pre-check: silently queries player_cert_sessions on every
+     successful patch lookup. CTA is shown ONLY if total > 0 and is
+     labeled with the count ("View My 3 Certificates"). Fixes the
+     dead-end button.
+   • Open: skips the session picker when the player has certs in
+     exactly one session (UXPin progressive-disclosure rule).
+   • Feed: each cert renders LIVE in a sandboxed iframe using
+     srcdoc — same HTML the printer will see (perfect fidelity).
+   • Print All: window.print() on a hidden container of live iframes
+     (no PNG conversion → no browser drift).
+   • Save All: html-to-image converts each iframe → PNG → Web Share
+     (mobile) or ZIP (desktop). Only path with potential per-browser
+     drift; acceptable for a "save to camera roll" goal.
    ══════════════════════════════════════════════════════════════════════ */
 
-const CERTS_WORKER_BASE = 'https://spmapa.workers.dev';
+const CERT_TPL_BASE = 'cert-templates/';   // relative to this page
+const CERT_TPL_BY_TIER = {
+  outstanding: 'spring-2026-template.html',
+  the_most:    'spring-2026-the-most-template.html',
+  exceptional: 'spring-2026-exceptional-achievement-template.html',
+};
+const CERT_TIER_LABEL = {
+  outstanding: 'Outstanding Achievement',
+  the_most:    'The Most',
+  exceptional: 'Exceptional Achievement',
+};
+const CERT_TIER_IS_LANDSCAPE = {
+  outstanding: false, the_most: true, exceptional: true,
+};
 
-let _certsLastApa     = null;
-let _certsLastSession = null;
-let _certsLastList    = [];   // last loaded list for the active session
+// Cached cert summary for the active player (drives CTA visibility + opens).
+let _certsState = {
+  member_number: null,   // resolved 5-digit member key (NOT raw input)
+  player_first:  null,
+  player_last:   null,
+  sessions:      [],     // [{session_id, session_name, cert_count}]
+  totalCount:    0,
+  activeFeed:    [],     // certs currently shown in the feed
+  activeSession: null,
+};
 
-function certsOpen()  { document.getElementById('certsOverlay').classList.add('open');
-                       document.body.style.overflow = 'hidden'; }
-function certsClose() { document.getElementById('certsOverlay').classList.remove('open');
-                       document.body.style.overflow = ''; }
+let _certTemplateCache = {};   // tier → raw HTML string
+let _certAssetCache    = { logo: null, watermark: null };
 
-function certsBody() { return document.getElementById('certsBody'); }
-
-function certsShowEmpty(msg) {
-  certsBody().innerHTML = '<div class="certs-empty">' + msg + '</div>';
-  document.getElementById('certsActionsBar').style.display = 'none';
+// ── DOM helpers ──
+const certsEl = id => document.getElementById(id);
+const certsBody = () => certsEl('certsBody');
+function certsOpen()  { certsEl('certsOverlay').classList.add('open'); document.body.style.overflow = 'hidden'; }
+function certsClose() { certsEl('certsOverlay').classList.remove('open'); document.body.style.overflow = ''; certsEl('certsPrintRoot').innerHTML = ''; }
+function certsEmpty(msg) {
+  certsBody().innerHTML = '<div class="certs-empty">' + escapeHtml(msg) + '</div>';
+  certsEl('certsActionsBar').style.display = 'none';
 }
-
-async function certsLoadSessions(apa) {
-  _certsLastApa = apa;
-  certsBody().innerHTML = '<div class="certs-empty">Loading sessions…</div>';
-  document.getElementById('certsTitle').textContent = 'Your Certificates';
-  document.getElementById('certsActionsBar').style.display = 'none';
-
-  let data;
-  try {
-    const r = await fetch(CERTS_WORKER_BASE + '/certs/sessions?apa=' + encodeURIComponent(apa));
-    data = await r.json();
-  } catch (e) {
-    certsShowEmpty('Could not reach the cert service. Try again later.');
-    return;
-  }
-  if (!data || !data.ok || !data.sessions || !data.sessions.length) {
-    certsShowEmpty('No certificates have been generated yet for any session you played in.');
-    return;
-  }
-  // Hide current session — only past
-  const past = data.sessions.filter(s => !s.is_current);
-  if (!past.length) {
-    certsShowEmpty('No past session certificates yet. Check back after the current session closes.');
-    return;
-  }
-  const html = '<div class="certs-session-list">'
-    + past.map(s => `<button class="certs-session-card" type="button" data-id="${s.id}" data-name="${escapeHtml(s.name)}">
-        <span class="name">${escapeHtml(s.name)}</span>
-        <span class="arrow">›</span>
-      </button>`).join('')
-    + '</div>';
-  certsBody().innerHTML = html;
-  certsBody().querySelectorAll('.certs-session-card').forEach(b => {
-    b.addEventListener('click', function () {
-      certsLoadFeed(apa, b.dataset.id, b.dataset.name);
-    });
-  });
-}
-
-async function certsLoadFeed(apa, sessionId, sessionName) {
-  _certsLastSession = { id: sessionId, name: sessionName };
-  document.getElementById('certsTitle').textContent = 'Certificates — ' + sessionName;
-  certsBody().innerHTML = '<div class="certs-empty">Loading certificates…</div>';
-  document.getElementById('certsActionsBar').style.display = 'none';
-
-  let data;
-  try {
-    const r = await fetch(CERTS_WORKER_BASE + '/certs/list?session_id=' + encodeURIComponent(sessionId) +
-                          '&apa=' + encodeURIComponent(apa));
-    data = await r.json();
-  } catch (e) {
-    certsShowEmpty('Could not reach the cert service.');
-    return;
-  }
-  if (!data || !data.ok || !data.certs || !data.certs.length) {
-    certsShowEmpty('No certificates earned for this session.');
-    return;
-  }
-  _certsLastList = data.certs;
-  const html = '<div class="certs-feed">'
-    + data.certs.map(c => `<div class="cert-card">
-        <img src="${c.r2_url}" alt="${escapeHtml(c.sp_label)} certificate" loading="lazy">
-        <div class="cert-meta">${escapeHtml(tierLabel(c.tier))} — ${escapeHtml(c.sp_label)} (${c.cert_count})${c.division_name ? ' — ' + escapeHtml(c.division_name) + ' Division' : ''}</div>
-      </div>`).join('')
-    + '</div>';
-  certsBody().innerHTML = html;
-  document.getElementById('certsActionsBar').style.display = 'flex';
-  // Toggle save vs download label based on Web Share availability
-  const saveBtn = document.getElementById('certsSaveAll');
-  saveBtn.textContent = certsHasWebShareFiles() ? 'Save All' : 'Download All';
-}
-
-function tierLabel(t) {
-  return t === 'outstanding' ? 'Outstanding Achievement'
-       : t === 'the_most'    ? 'The Most'
-       : t === 'exceptional' ? 'Exceptional Achievement'
-       : t;
-}
-
 function escapeHtml(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-/* ── Print All — build hidden print container with named pages ── */
+// ── Token substitution (mirror of the worker's substitute()) ──
+function certSubstitute(tpl, tokens) {
+  let out = tpl;
+  for (const [k, v] of Object.entries(tokens)) {
+    out = out.split('{{' + k + '}}').join(v == null ? '' : String(v));
+  }
+  return out;
+}
+
+async function certFetchText(path) {
+  const r = await fetch(path, { cache: 'force-cache' });
+  if (!r.ok) throw new Error('Fetch failed: ' + path + ' → ' + r.status);
+  return r.text();
+}
+
+async function certEnsureAssets() {
+  if (!_certAssetCache.logo) {
+    _certAssetCache.logo = (await certFetchText(CERT_TPL_BASE + 'apa-logo-datauri.txt')).trim();
+  }
+  if (!_certAssetCache.watermark) {
+    _certAssetCache.watermark = (await certFetchText(CERT_TPL_BASE + 'spring-2026-watermark-datauri.txt')).trim();
+  }
+}
+
+async function certEnsureTemplate(tier) {
+  if (!_certTemplateCache[tier]) {
+    _certTemplateCache[tier] = await certFetchText(CERT_TPL_BASE + CERT_TPL_BY_TIER[tier]);
+  }
+  return _certTemplateCache[tier];
+}
+
+// ── Build the full HTML for one cert (template + tokens). Used by feed,
+//    print container, and save-as-PNG. ──
+function certCountWord(n) {
+  const w = ['Zero','One','Two','Three','Four','Five','Six','Seven',
+             'Eight','Nine','Ten','Eleven','Twelve'];
+  return (n >= 0 && n < w.length) ? w[n] : String(n);
+}
+function seasonLabelFromSessionName(name) {
+  // "Spring 2026" → "SPRING 2026" · "2026 Spring Session" → "SPRING 2026"
+  const m = String(name || '').match(/(Spring|Summer|Fall|Winter)\s+(\d{4})|(\d{4})\s+(Spring|Summer|Fall|Winter)/i);
+  if (!m) return String(name || '').toUpperCase();
+  const season = (m[1] || m[4] || '').toUpperCase();
+  const year   = (m[2] || m[3] || '');
+  return season + ' ' + year;
+}
+async function certBuildHtml(cert, ctx) {
+  await certEnsureAssets();
+  const tpl = await certEnsureTemplate(cert.tier);
+  return certSubstitute(tpl, {
+    PLAYER_FIRST:        ctx.player_first || '',
+    PLAYER_LAST:         ctx.player_last  || '',
+    ACH_TYPE:            cert.sp_label,
+    ACH_QUANTITY:        certCountWord(cert.cert_count) + ' (' + cert.cert_count + ')',
+    ACH_COUNT:           String(cert.cert_count),
+    TEAM_NAME:           cert.team_name     || '',
+    DIVISION_NAME:       cert.division_name || '',
+    SESSION:             ctx.session_label,
+    SEAL_SEASON:         ctx.season_label,
+    DATE:                ctx.date_str,
+    APA_LOGO_DATAURI:    _certAssetCache.logo,
+    WATERMARK_DATAURI:   _certAssetCache.watermark,
+  });
+}
+
+// ── Iframe factory: a cert in a sandbox sized to native print dimensions ──
+function certBuildIframe(html, isLandscape) {
+  const f = document.createElement('iframe');
+  f.className = 'cert-iframe';
+  f.setAttribute('scrolling', 'no');
+  f.setAttribute('aria-label', 'certificate');
+  f.style.cssText = 'border:0;display:block;background:#fff;'
+    + 'width:' + (isLandscape ? '11in' : '8.5in') + ';'
+    + 'height:' + (isLandscape ? '8.5in' : '11in') + ';';
+  f.srcdoc = html;
+  return f;
+}
+
+// ── Player lookup: resolve raw input → member_number via the same RPC
+//    the patch dashboard uses. Caches in _certsState. ──
+async function certsResolveMember(raw) {
+  if (!raw) return null;
+  // Use whatever session is active in the patch dashboard (any works for resolution)
+  let sessionId = parseInt(document.getElementById('sessionSelect').value, 10);
+  if (!sessionId && Array.isArray(window.sessions) && window.sessions.length) {
+    sessionId = window.sessions[0].id;
+  }
+  if (!sessionId) return null;
+  try {
+    const rows = await sbRpc('slate', 'ss_player_lookup', { p_input: raw, p_session_id: sessionId });
+    if (!rows || !rows.length) return null;
+    return { member_number: String(rows[0].member_number).slice(-5).padStart(5, '0'),
+             player_first:  rows[0].first_name || '',
+             player_last:   rows[0].last_name  || '' };
+  } catch (e) { return null; }
+}
+
+// ── Pre-check on successful lookup → CTA visibility + count ──
+async function certsPrecheck(raw) {
+  const wrap  = certsEl('certsCtaWrap');
+  const label = certsEl('certsCtaLabel');
+  wrap.style.display = 'none';   // hide until we know
+
+  const player = await certsResolveMember(raw);
+  if (!player) return;
+
+  let sessions;
+  try {
+    sessions = await sbRpc('slate', 'player_cert_sessions',
+      { p_member_number: player.member_number });
+  } catch (e) {
+    return; // service hiccup → fail closed (no dead-end button)
+  }
+  const total = (sessions || []).reduce((a, s) => a + (s.cert_count || 0), 0);
+  if (total === 0) return;
+
+  _certsState.member_number = player.member_number;
+  _certsState.player_first  = player.player_first;
+  _certsState.player_last   = player.player_last;
+  _certsState.sessions      = sessions;
+  _certsState.totalCount    = total;
+
+  label.textContent = total === 1
+    ? 'View My Certificate'
+    : 'View My ' + total + ' Certificates';
+  wrap.style.display = '';
+}
+
+// ── Open path: skip picker if only one session, else show picker ──
+function certsOpenFromCta() {
+  if (!_certsState.member_number) return;
+  certsOpen();
+  if (_certsState.sessions.length === 1) {
+    const s = _certsState.sessions[0];
+    certsLoadFeed(s.session_id, s.session_name);
+  } else {
+    certsRenderPicker();
+  }
+}
+
+function certsRenderPicker() {
+  certsEl('certsTitle').textContent = 'Your Certificates';
+  certsEl('certsActionsBar').style.display = 'none';
+  const html = '<div class="certs-session-list">' +
+    _certsState.sessions.map(s =>
+      `<button class="certs-session-card" type="button" data-id="${s.session_id}" data-name="${escapeHtml(s.session_name)}">
+         <span class="name">${escapeHtml(s.session_name)} <span style="opacity:.6;font-weight:500;font-size:.86em">(${s.cert_count})</span></span>
+         <span class="arrow">›</span>
+       </button>`).join('') +
+    '</div>';
+  certsBody().innerHTML = html;
+  certsBody().querySelectorAll('.certs-session-card').forEach(b => {
+    b.addEventListener('click', () => certsLoadFeed(parseInt(b.dataset.id, 10), b.dataset.name));
+  });
+}
+
+async function certsLoadFeed(sessionId, sessionName) {
+  _certsState.activeSession = { id: sessionId, name: sessionName };
+  certsEl('certsTitle').textContent = sessionName + ' Certificates';
+  certsBody().innerHTML = '<div class="certs-empty">Loading certificates…</div>';
+  certsEl('certsActionsBar').style.display = 'none';
+
+  let rows;
+  try {
+    rows = await sbRpc('slate', 'player_certs',
+      { p_member_number: _certsState.member_number, p_session_id: sessionId });
+  } catch (e) {
+    certsEmpty('Could not load certificates. Try again later.');
+    return;
+  }
+  if (!rows || !rows.length) {
+    certsEmpty('No certificates earned for this session.');
+    return;
+  }
+  _certsState.activeFeed = rows;
+
+  const ctx = {
+    player_first:  _certsState.player_first,
+    player_last:   _certsState.player_last,
+    session_label: sessionName,
+    season_label:  seasonLabelFromSessionName(sessionName),
+    date_str:      new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }),
+  };
+
+  // Build the feed container, then inject one iframe per cert.
+  certsBody().innerHTML = '<div class="certs-feed" id="certsFeedRoot"></div>';
+  const feed = certsEl('certsFeedRoot');
+  const wraps = [];
+  for (const c of rows) {
+    const wrap = document.createElement('div');
+    wrap.className = 'cert-card';
+    const isLs = CERT_TIER_IS_LANDSCAPE[c.tier];
+    wrap.innerHTML = `<div class="cert-iframe-wrap ${isLs ? 'landscape' : 'portrait'}"></div>
+      <div class="cert-meta">${escapeHtml(CERT_TIER_LABEL[c.tier] || c.tier)} — ${escapeHtml(c.sp_label)} (${c.cert_count})${c.division_name ? ' — ' + escapeHtml(c.division_name) + ' Division' : ''}</div>`;
+    feed.appendChild(wrap);
+    const html = await certBuildHtml(c, ctx);
+    const iframe = certBuildIframe(html, isLs);
+    const ifwrap = wrap.querySelector('.cert-iframe-wrap');
+    ifwrap.appendChild(iframe);
+    wraps.push({ wrap: ifwrap, isLandscape: isLs });
+  }
+  // Compute exact scale per wrapper now that they're in the DOM, and on resize.
+  function rescaleAll() {
+    for (const { wrap, isLandscape } of wraps) {
+      const native = isLandscape ? 1056 : 816;
+      const w = wrap.clientWidth;
+      if (w > 0) wrap.style.setProperty('--cert-scale', String(w / native));
+    }
+  }
+  rescaleAll();
+  window.addEventListener('resize', rescaleAll, { passive: true });
+  certsEl('certsActionsBar').style.display = 'flex';
+  // Mobile gets "Save All" (Web Share); desktop gets "Download All"
+  certsEl('certsSaveAll').textContent = certHasWebShareFiles() ? 'Save All' : 'Download All';
+}
+
+// ── Print All — pure HTML print, no PNG conversion → identical fidelity ──
 async function certsPrintAll() {
-  if (!_certsLastList.length) return;
-  const root = document.getElementById('certsPrintRoot');
-  root.innerHTML = _certsLastList.map(c => `
-    <div class="cert-print-page ${c.is_landscape ? 'landscape' : 'portrait'}">
-      <img src="${c.r2_url}" alt="">
-    </div>
-  `).join('');
-  // Wait for images to load before printing
-  const imgs = root.querySelectorAll('img');
-  await Promise.all(Array.from(imgs).map(img =>
-    img.complete ? Promise.resolve()
-                 : new Promise(res => { img.onload = img.onerror = res; })
-  ));
+  if (!_certsState.activeFeed.length) return;
+  const root = certsEl('certsPrintRoot');
+  root.innerHTML = '';
+
+  const ctx = {
+    player_first:  _certsState.player_first,
+    player_last:   _certsState.player_last,
+    session_label: _certsState.activeSession.name,
+    season_label:  seasonLabelFromSessionName(_certsState.activeSession.name),
+    date_str:      new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }),
+  };
+
+  for (const c of _certsState.activeFeed) {
+    const html = await certBuildHtml(c, ctx);
+    const page = document.createElement('div');
+    page.className = 'cert-print-page ' + (CERT_TIER_IS_LANDSCAPE[c.tier] ? 'landscape' : 'portrait');
+    page.appendChild(certBuildIframe(html, CERT_TIER_IS_LANDSCAPE[c.tier]));
+    root.appendChild(page);
+  }
+  // Give iframes a tick to render before opening the print dialog
+  await new Promise(r => setTimeout(r, 250));
   window.print();
 }
 
-/* ── Save All / Download All — Web Share API or ZIP fallback ── */
-function certsHasWebShareFiles() {
+// ── Save All / Download All — html-to-image per cert ──
+function certHasWebShareFiles() {
   try {
     return navigator.canShare && navigator.canShare({
       files: [new File(['x'], 'x.png', { type: 'image/png' })],
@@ -2154,102 +2350,100 @@ function certsHasWebShareFiles() {
   } catch (e) { return false; }
 }
 
+async function certsLoadLib(globalName, url) {
+  if (window[globalName]) return;
+  await new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = url; s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
+
 async function certsSaveAll() {
-  if (!_certsLastList.length) return;
-  const saveBtn = document.getElementById('certsSaveAll');
-  const orig = saveBtn.textContent;
-  saveBtn.textContent = 'Preparing…';
-  saveBtn.disabled = true;
-
+  if (!_certsState.activeFeed.length) return;
+  const btn = certsEl('certsSaveAll');
+  const orig = btn.textContent;
+  btn.textContent = 'Preparing…';
+  btn.disabled = true;
   try {
-    // Fetch all PNGs as Blobs/Files
-    const files = await Promise.all(_certsLastList.map(async (c, i) => {
-      const r = await fetch(c.r2_url, { cache: 'no-store' });
-      const b = await r.blob();
-      const fname = (c.tier + '-' + (c.sp_type || '') +
-                     (c.division_name ? '-' + slugForFile(c.division_name) : '') +
-                     '.png').toLowerCase();
-      return new File([b], fname, { type: 'image/png' });
-    }));
-
-    if (certsHasWebShareFiles()) {
+    await certsLoadLib('htmlToImage', 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/dist/html-to-image.min.js');
+    const files = [];
+    const feed = certsEl('certsFeedRoot');
+    if (!feed) throw new Error('Feed not ready');
+    const iframes = feed.querySelectorAll('iframe.cert-iframe');
+    for (let i = 0; i < iframes.length; i++) {
+      const ifr = iframes[i];
+      const c = _certsState.activeFeed[i];
+      // html-to-image runs against the iframe's document.body (where the
+      // cert lives). Result is a Blob.
+      const blob = await window.htmlToImage.toBlob(ifr.contentDocument.body, {
+        pixelRatio: 2,
+        cacheBust: true,
+        backgroundColor: '#ffffff',
+      });
+      const safe = c.sp_type.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+      const div  = c.division_name ? '-' + c.division_name.replace(/[^a-z0-9]+/gi, '-').toLowerCase() : '';
+      const fname = `${c.tier}-${safe}${div}.png`;
+      files.push(new File([blob], fname, { type: 'image/png' }));
+    }
+    if (certHasWebShareFiles()) {
       await navigator.share({
         files,
         title: 'My APA Certificates',
-        text: 'SPM ' + (_certsLastSession ? _certsLastSession.name : '') + ' certificates',
+        text: 'SPM ' + (_certsState.activeSession ? _certsState.activeSession.name : '') + ' certificates',
       });
     } else {
-      // Desktop fallback: zip via dynamic JSZip import
-      await certsDownloadZip(files);
+      await certsLoadLib('JSZip', 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
+      const zip = new window.JSZip();
+      for (const f of files) zip.file(f.name, f);
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const sess = _certsState.activeSession ? _certsState.activeSession.name.replace(/\s+/g, '-').toLowerCase() : 'session';
+      a.href = url; a.download = 'certs-' + sess + '.zip';
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 5000);
     }
   } catch (e) {
-    if (e && e.name !== 'AbortError') {
-      alert('Could not save: ' + (e.message || e));
-    }
+    if (e && e.name !== 'AbortError') alert('Could not save: ' + (e.message || e));
   } finally {
-    saveBtn.textContent = orig;
-    saveBtn.disabled = false;
+    btn.textContent = orig;
+    btn.disabled = false;
   }
 }
 
-function slugForFile(s) {
-  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-}
-
-async function certsDownloadZip(files) {
-  // Load JSZip lazily from CDN
-  if (typeof JSZip === 'undefined') {
-    await new Promise((res, rej) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
-      s.onload = res; s.onerror = rej;
-      document.head.appendChild(s);
-    });
-  }
-  const zip = new JSZip();
-  for (const f of files) zip.file(f.name, f);
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  const sessName = _certsLastSession ? _certsLastSession.name.replace(/\s+/g, '-').toLowerCase() : 'session';
-  a.href = url;
-  a.download = 'certs-' + sessName + '.zip';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 5000);
-}
-
-/* ── Wire up button + overlay handlers + show CTA after player lookup ── */
+/* ── Wire up handlers + observe the patch dashboard to drive the CTA ── */
 document.addEventListener('DOMContentLoaded', function () {
-  document.getElementById('certsClose').addEventListener('click', certsClose);
-  document.getElementById('certsRefresh').addEventListener('click', function () {
-    if (_certsLastApa) certsLoadSessions(_certsLastApa);
+  certsEl('certsClose').addEventListener('click', certsClose);
+  certsEl('certsRefresh').addEventListener('click', function () {
+    const raw = (document.getElementById('memberInput').value || '').trim();
+    if (raw) certsPrecheck(raw);
   });
-  document.getElementById('certsPrintAll').addEventListener('click', certsPrintAll);
-  document.getElementById('certsSaveAll').addEventListener('click', certsSaveAll);
-  document.getElementById('certsBtn').addEventListener('click', function () {
-    const apa = (document.getElementById('memberInput').value || '').trim();
-    if (!apa) return;
-    certsOpen();
-    certsLoadSessions(apa);
-  });
-});
+  certsEl('certsPrintAll').addEventListener('click', certsPrintAll);
+  certsEl('certsSaveAll').addEventListener('click', certsSaveAll);
+  certsEl('certsBtn').addEventListener('click', certsOpenFromCta);
 
-/* Show "View My Certificates" CTA after a successful player lookup.
-   The existing app sets dashboard innerHTML when a search succeeds — we hook
-   the same event by watching memberPill visibility, which the app toggles
-   on/off on each search. */
-(function () {
+  // Observe memberPill (which the app toggles on every successful search):
+  // every change re-runs the pre-check with the current input. Falls back
+  // to hiding the CTA cleanly between searches.
   const pill = document.getElementById('memberPill');
-  const cta  = document.getElementById('certsCtaWrap');
-  if (!pill || !cta) return;
-  const obs = new MutationObserver(() => {
-    const visible = pill.style.display !== 'none' && pill.innerHTML.trim();
-    cta.style.display = visible ? '' : 'none';
-  });
-  obs.observe(pill, { attributes: true, childList: true, subtree: true,
-                      attributeFilter: ['style'] });
-})();
+  if (pill) {
+    const obs = new MutationObserver(() => {
+      const visible = pill.style.display !== 'none' && pill.innerHTML.trim();
+      if (visible) {
+        const raw = (document.getElementById('memberInput').value || '').trim();
+        // Reset state for the new player and re-precheck
+        _certsState = { member_number:null, player_first:null, player_last:null,
+                        sessions:[], totalCount:0, activeFeed:[], activeSession:null };
+        certsEl('certsCtaWrap').style.display = 'none';
+        if (raw) certsPrecheck(raw);
+      } else {
+        certsEl('certsCtaWrap').style.display = 'none';
+      }
+    });
+    obs.observe(pill, { attributes:true, childList:true, subtree:true, attributeFilter:['style'] });
+  }
+});
     </script>
   </body>
 </html>
