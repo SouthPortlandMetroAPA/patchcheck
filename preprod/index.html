@@ -919,10 +919,13 @@
 
       <!-- ── CERTIFICATES button — appears only after a successful player lookup ── -->
       <div id="certsCtaWrap" class="certs-cta-wrap" style="display:none;">
-        <button id="certsBtn" class="certs-cta" type="button">
-          <span class="certs-cta-icon">📜</span>
-          <span class="certs-cta-label">View My Certificates</span>
-          <span class="certs-cta-sub">Past sessions you've earned awards for</span>
+        <button id="certsBtn" class="certs-cta" type="button" aria-haspopup="dialog">
+          <span class="certs-cta-icon" aria-hidden="true">🏆</span>
+          <span class="certs-cta-body">
+            <span class="certs-cta-label" id="certsCtaLabel">View My Certificates</span>
+            <span class="certs-cta-sub">Awards you've earned in past sessions</span>
+          </span>
+          <span class="certs-cta-chevron" aria-hidden="true">›</span>
         </button>
       </div>
 
@@ -1799,27 +1802,40 @@ document.addEventListener('DOMContentLoaded', async function () {
         --certs-text:       #1a1410;
       }
 
-      /* ── "View My Certificates" CTA — sits between dashboard and CTA row ── */
+      /* ── "View My Certificates" CTA — sits between dashboard and CTA row.
+         Restyled to house style (2026 CTA best practices):
+           • White card (AA-contrast red text), NOT a garish flat-gold slab
+           • Thin gold left-stripe = "premium/award" cue without low-contrast fill
+           • Trophy icon (left) + label/sub (middle) + chevron (right nav affordance)
+           • Matches the app's 12px radius + soft-shadow language; reads as the
+             primary POSITIVE action, distinct from the red/blue utility buttons. ── */
       .certs-cta-wrap {
         margin: 14px 0 0;
       }
       .certs-cta {
+        display: flex;
+        align-items: center;
+        gap: 12px;
         width: 100%;
-        background: linear-gradient(135deg, #c9a159 0%, #f8d878 50%, #c9a159 100%);
-        border: 2px solid #8a6618;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-left: 5px solid #c9a159;
         border-radius: 12px;
-        padding: 14px 18px;
-        text-align: center;
-        color: #2a1808;
+        padding: 13px 16px;
+        text-align: left;
         font-family: inherit;
         cursor: pointer;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.16);
-        transition: transform 0.06s ease, box-shadow 0.12s ease;
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.10);
+        transition: transform 0.08s ease, box-shadow 0.14s ease;
       }
-      .certs-cta:active { transform: translateY(1px); box-shadow: 0 1px 4px rgba(0,0,0,0.18); }
-      .certs-cta-icon  { display:block; font-size: 1.6rem; line-height:1; margin-bottom: 4px; }
-      .certs-cta-label { display:block; font-size: 1rem; font-weight: 800; letter-spacing: 0.04em; }
-      .certs-cta-sub   { display:block; font-size: 0.75rem; opacity: 0.78; margin-top: 2px; }
+      .certs-cta:hover  { transform: translateY(-1px); box-shadow: 0 5px 16px rgba(0,0,0,0.14); }
+      .certs-cta:active { transform: translateY(0);    box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+      .certs-cta:focus-visible { outline: 3px solid rgba(0,49,161,0.35); outline-offset: 2px; }
+      .certs-cta-icon    { font-size: 1.7rem; line-height: 1; flex: 0 0 auto; }
+      .certs-cta-body    { flex: 1 1 auto; min-width: 0; }
+      .certs-cta-label   { display:block; font-size: 1rem;   font-weight: 800; color: var(--spm-primary); line-height: 1.2; }
+      .certs-cta-sub     { display:block; font-size: 0.74rem; font-weight: 500; color: var(--muted); margin-top: 2px; }
+      .certs-cta-chevron { font-size: 1.5rem; font-weight: 700; color: #c9a159; flex: 0 0 auto; line-height: 1; }
 
       /* ── Full-screen overlay ── */
       .certs-overlay {
