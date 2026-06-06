@@ -1,0 +1,24 @@
+name = "patchcheck-certs"
+main = "worker.js"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Route the worker at spmapa.workers.dev/certs/* — register the route in the CF
+# dashboard once deployed, or use a Workers Custom Domain.
+# routes = [ { pattern = "spmapa.workers.dev/certs/*", custom_domain = false } ]
+
+# ── R2 bucket binding ──
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "apa-photos"
+
+# ── Cloudflare Browser Rendering binding ──
+[browser]
+binding = "BROWSER"
+
+# ── Secrets (set via `wrangler secret put`):
+#     wrangler secret put SUPABASE_URL
+#     wrangler secret put SUPABASE_ANON_KEY
+#     wrangler secret put SUPABASE_SERVICE_KEY
+#     wrangler secret put APA_PHOTOS_PROXY
+# ──
