@@ -36,6 +36,40 @@
       /* Hidden until maintenance check passes */
       body { visibility: hidden; }
 
+      /* ── CANONICAL "Updating…" overlay (per MEMORY.md consistency rule).
+             Identical to Apps/SpmAdminV2/site/preprod/admin.html. Do not
+             customize per-app. Driven by checkVersion() + pollForDeploy(). ── */
+      .update-overlay {
+        position: fixed; inset: 0;
+        background: rgba(10, 20, 40, 0.72);
+        display: none; align-items: center; justify-content: center;
+        z-index: 9999; padding: 24px;
+        visibility: visible;             /* survives body{visibility:hidden} */
+      }
+      .update-overlay.shown { display: flex; }
+      .update-box {
+        background: #fff; border-radius: 12px;
+        padding: 36px 32px; max-width: 420px; width: 100%;
+        text-align: center;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+      }
+      .update-spinner {
+        width: 56px; height: 56px; margin: 0 auto 18px;
+        border-radius: 50%;
+        border: 5px solid rgba(0,49,161,0.15);
+        border-top-color: var(--spm-accent);
+        animation: update-spin 0.85s linear infinite;
+      }
+      @keyframes update-spin { to { transform: rotate(360deg); } }
+      .update-title {
+        font-size: 1.3rem; font-weight: 800;
+        margin-bottom: 6px; color: var(--spm-accent);
+        letter-spacing: 0.01em;
+      }
+      .update-sub {
+        color: #444; font-size: 0.9rem; line-height: 1.5;
+      }
+
       .page {
         width: 100%;
         max-width: 600px;
@@ -849,6 +883,16 @@
   </head>
 
   <body>
+    <!-- CANONICAL update overlay (see MEMORY.md "consistency" rule). Toggled
+         by checkVersion()/pollForDeploy(). Identical to Slate's admin page. -->
+    <div id="updateOverlay" class="update-overlay">
+      <div class="update-box">
+        <div class="update-spinner" aria-hidden="true"></div>
+        <div class="update-title">Updating <span id="updateAppName">PatchCheck</span></div>
+        <div class="update-sub">A new version is being deployed. This tab will reload automatically&hellip;</div>
+      </div>
+    </div>
+
     <div class="page">
       <header>
         <h1 class="title">South Portland Metro APA</h1>
@@ -981,7 +1025,9 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.6';   // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.7';   // matches apa_core.apps.PatchCheck-preprod
+                               // 1.7 = standardize "Updating" overlay to match Slate
+                               //       (canonical HTML/CSS pattern, no JS-built DOM)
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -1688,17 +1734,15 @@ async function checkVersion() {
     if (remote && remote !== APP_VERSION) showUpdateOverlay(remote);
   } catch (e) {}
 }
+/* Canonical overlay (per MEMORY.md "consistency" rule). DOM is statically
+   defined in body; we only toggle the .shown class and set the app name. */
 function showUpdateOverlay(target) {
   if (_updating) return;
   _updating = true;
-  var ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(17,17,17,0.94);'
-    + 'display:flex;align-items:center;justify-content:center;'
-    + 'font-family:system-ui,-apple-system,sans-serif;color:#fff;text-align:center;padding:24px;';
-  ov.innerHTML = '<div><div style="font-size:34px;font-weight:900;font-style:italic;color:#ea002a;margin-bottom:14px;">PatchCheck</div>'
-    + '<div style="font-size:16px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:#9db4ff;">Updating…</div>'
-    + '<div style="font-size:13px;color:#aaa;margin-top:10px;">A new version is live. One moment.</div></div>';
-  document.body.appendChild(ov);
+  var name = document.getElementById('updateAppName');
+  if (name) name.textContent = APP_NAME_BASE;
+  var ov = document.getElementById('updateOverlay');
+  if (ov) ov.classList.add('shown');
   pollForDeploy(target);
 }
 function pollForDeploy(target) {
