@@ -1025,7 +1025,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.16';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.17';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -2194,8 +2194,18 @@ function certSubstitute(tpl, tokens) {
   return out;
 }
 
+// Cache-bust by appending the app version, so a template edit shipped in
+// vN+1 invalidates browsers that aggressively cached the vN template.
+// (Pre-1.17 used `cache: 'force-cache'` with no version key, so old
+// templates persisted forever even after the new index.html landed —
+// e.g. "The Most Grand Slam" continued to render for users whose cached
+// the_most template still had the hardcoded "The Most" prefix.)
+function certCacheBustedPath(path) {
+  return path + (path.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(APP_VERSION);
+}
+
 async function certFetchText(path) {
-  const r = await fetch(path, { cache: 'force-cache' });
+  const r = await fetch(certCacheBustedPath(path), { cache: 'force-cache' });
   if (!r.ok) throw new Error('Fetch failed: ' + path + ' → ' + r.status);
   return r.text();
 }
