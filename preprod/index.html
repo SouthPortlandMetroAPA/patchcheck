@@ -1025,7 +1025,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.10';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.11';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -2234,14 +2234,15 @@ async function certBuildHtml(cert, ctx) {
     APA_LOGO_DATAURI:    _certAssetCache.logo,
     WATERMARK_DATAURI:   _certAssetCache.watermark,
   });
-  // The portrait Outstanding template has a "{{TEAM_NAME}} - {{DIVISION_NAME}}
-  // Division" line that we DON'T want when both are empty (which is always
-  // the case for player-level Outstanding aggregates and for Exceptional
-  // league-wide tier). The template's :has(.req:empty) CSS rule doesn't
-  // fire reliably across browsers, so strip the line surgically here.
+  // The portrait Outstanding template has a literal "{{TEAM_NAME}} -
+  // {{DIVISION_NAME}} Division" line. After substituting empties, the
+  // rendered text becomes " -  Division". Strip the whole line when both
+  // team and division are empty (Outstanding aggregates across divisions
+  // for one player; Exceptional is league-wide — neither has a single
+  // owning division to print).
   if (!cert.division_name && !cert.team_name) {
     html = html.replace(
-      /<div class="ach-line"><span class="req"><\/span>\s*-\s*<span class="req"><\/span>\s*Division<\/div>\s*/,
+      /<div class="ach-line">\s*-\s*Division<\/div>\s*/,
       ''
     );
   }
