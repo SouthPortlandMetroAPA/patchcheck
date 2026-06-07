@@ -1025,7 +1025,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.15';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.16';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -2147,6 +2147,15 @@ const CERT_TIER_IS_LANDSCAPE = {
   outstanding: false, the_most: true, exceptional: true,
 };
 
+// Slams (Mini-Slam / Grand Slam) are league-wide, binary achievements.
+// They're tier='exceptional' for ordering purposes but RENDER with the
+// the_most landscape layout (with a templated headline/scope so it does
+// NOT say "The Most" or print a division line).
+const CERT_SLAM_SP_TYPES = new Set(['8m', '9m', 'g']);
+function certIsSlam(c) { return CERT_SLAM_SP_TYPES.has(c.sp_type); }
+function certTemplateKey(c) { return certIsSlam(c) ? 'the_most' : c.tier; }
+function certIsLandscape(c) { return CERT_TIER_IS_LANDSCAPE[certTemplateKey(c)]; }
+
 // Cached cert summary for the active player (drives CTA visibility + opens).
 let _certsState = {
   member_number: null,   // resolved 5-digit member key (NOT raw input)
@@ -2224,17 +2233,31 @@ function seasonLabelFromSessionName(name) {
 }
 async function certBuildHtml(cert, ctx) {
   await certEnsureAssets();
-  const tpl = await certEnsureTemplate(cert.tier);
-  // Mini-Slams and Grand Slams are binary achievements — a player either
-  // got one in the session or didn't. A count of "(1)" is redundant and
-  // a count of >1 is impossible. Suppress the count for these sp_types.
-  const isSlam = cert.sp_type === '8m' || cert.sp_type === '9m' || cert.sp_type === 'g';
+  // Slams use the_most template regardless of their (exceptional) tier.
+  const tpl = await certEnsureTemplate(certTemplateKey(cert));
+  const isSlam = certIsSlam(cert);
+
+  // ── ACH_HEADLINE + ACH_SCOPE (the_most template uses these) ──
+  //   The Most cert:  "The Most 8 Ball Break & Run (3)"  + "Mount Hood 8 Ball Division"
+  //   Slam cert:      "9 Ball Mini-Slam"                 + "Across All Divisions"
+  let achHeadline = '';
+  let achScope    = '';
+  if (isSlam) {
+    achHeadline = cert.sp_label;                 // e.g. "9 Ball Mini-Slam" — no count
+    achScope    = 'Across All Divisions';
+  } else if (cert.tier === 'the_most') {
+    achHeadline = 'The Most ' + cert.sp_label + ' (' + cert.cert_count + ')';
+    achScope    = (cert.division_name || '') + ' Division';
+  }
+
   let html = certSubstitute(tpl, {
     PLAYER_FIRST:        ctx.player_first || '',
     PLAYER_LAST:         ctx.player_last  || '',
     ACH_TYPE:            cert.sp_label,
     ACH_QUANTITY:        isSlam ? '' : (certCountWord(cert.cert_count) + ' (' + cert.cert_count + ')'),
     ACH_COUNT:           isSlam ? '' : String(cert.cert_count),
+    ACH_HEADLINE:        achHeadline,
+    ACH_SCOPE:           achScope,
     TEAM_NAME:           cert.team_name     || '',
     DIVISION_NAME:       cert.division_name || '',
     SESSION:             ctx.session_label,
@@ -2255,12 +2278,11 @@ async function certBuildHtml(cert, ctx) {
       ''
     );
   }
-  // Slam cleanup: strip leading whitespace in ach-line / ach-headline that
-  // now starts with the empty ACH_QUANTITY placeholder, and strip the
-  // dangling " ( )" left behind by an empty ACH_COUNT in headlines.
+  // Slam cleanup on Exceptional-template path (if a slam ever routes there):
+  // strip leading whitespace + dangling " ()" left by empty ACH_QUANTITY /
+  // ACH_COUNT placeholders.
   if (isSlam) {
     html = html.replace(/<div class="ach-line">\s+/g, '<div class="ach-line">');
-    html = html.replace(/<div class="ach-headline">\s+/g, '<div class="ach-headline">');
     html = html.replace(/\s*\(\s*\)/g, '');
   }
   return html;
@@ -2392,7 +2414,7 @@ async function certsLoadFeed(sessionId, sessionName) {
   for (const c of rows) {
     const wrap = document.createElement('div');
     wrap.className = 'cert-card';
-    const isLs = CERT_TIER_IS_LANDSCAPE[c.tier];
+    const isLs = certIsLandscape(c);
     // No bottom meta banner — the cert design is self-explanatory.
     wrap.innerHTML = `<div class="cert-iframe-wrap ${isLs ? 'landscape' : 'portrait'}"></div>`;
     feed.appendChild(wrap);
@@ -2442,7 +2464,7 @@ async function certsPrintAll() {
     const jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
     if (!jsPDFCtor) throw new Error('jsPDF failed to load');
 
-    const firstLs = CERT_TIER_IS_LANDSCAPE[_certsState.activeFeed[0].tier];
+    const firstLs = certIsLandscape(_certsState.activeFeed[0]);
     const pdf = new jsPDFCtor({
       unit: 'in',
       format: 'letter',
@@ -2454,7 +2476,7 @@ async function certsPrintAll() {
       btn.textContent = 'Preparing ' + (i + 1) + ' / ' + iframes.length + '…';
       const ifr = iframes[i];
       const c   = _certsState.activeFeed[i];
-      const isLs = CERT_TIER_IS_LANDSCAPE[c.tier];
+      const isLs = certIsLandscape(c);
       await certIframeReady(ifr);
 
       const dataUrl = await certHtmlToPngSafe(ifr.contentDocument.body, {
