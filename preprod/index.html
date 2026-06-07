@@ -1025,7 +1025,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.20';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.21';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -2467,6 +2467,20 @@ async function certsPrintAll() {
   const orig = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Preparing…';
+  // ── Pre-open a blank tab/window for the popup-blocker-prone paths ──
+  // Android Chrome 138+ (and Edge/Brave Android) reject window.open after
+  // any await chain because it loses user-gesture chaining. We open the
+  // window NOW, synchronously in the click handler, and swap its location
+  // to the PDF blob URL once the render is done. Desktop Safari/Firefox
+  // hit the same path because their print() on PDF blob iframes is
+  // unreliable (Bugzilla #1376151 / Apple 252821086). Chromium desktop
+  // uses the hidden-iframe path and doesn't need this.
+  const useWindowOpenPath = certIsMobileLike() || certIsFirefox() || certIsDesktopSafari();
+  let prePoppedWindow = null;
+  if (useWindowOpenPath) {
+    try { prePoppedWindow = window.open('about:blank', '_blank'); }
+    catch (_) { prePoppedWindow = null; }
+  }
   try {
     await certsLoadLib('htmlToImage', 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/dist/html-to-image.min.js');
     await certsLoadLib('jspdf',       'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js');
@@ -2522,27 +2536,31 @@ async function certsPrintAll() {
     }
 
     btn.textContent = 'Opening print dialog…';
-    // Desktop browsers default to "open PDFs in new tab" for some users and
-    // "download PDFs" for others — and the second group never sees a print
-    // dialog, just a download. We bypass that preference by embedding the
-    // PDF in a hidden iframe and calling print() directly on its window.
-    // Same-origin Blob URLs are scriptable, so this works in Chrome/Edge/
-    // Firefox/Safari without popup-blocker drama.
-    //
-    // Mobile: stay on the new-tab path. iOS Safari doesn't render PDFs
-    // inside iframes reliably (it offers Save to Files / Books / etc.
-    // instead), and iframe.contentWindow.print() often no-ops there.
-    if (certIsMobileLike()) {
+    // Path matrix (researched 2026):
+    //   • Chromium DESKTOP (Chrome/Edge/Brave/Opera/Vivaldi/Arc on
+    //     Win/Mac/Linux): hidden-iframe + contentWindow.print() — bypasses
+    //     "download PDFs" pref + popup blocker. WORKS reliably.
+    //   • Firefox DESKTOP (any OS): SecurityError on iframe.print() of PDF
+    //     blob (cross-origin pdf.js). Use pre-popped window + autoPrint.
+    //   • macOS Safari DESKTOP: print() on PDF iframe freezes tab.
+    //     Same window.open path; user invokes Cmd-P from Safari's viewer.
+    //   • Mobile (all): iOS Safari + Chromium-Android both render PDFs in
+    //     the OS PDF viewer best when opened as a new tab. Pre-popped
+    //     window guarantees popup blocker doesn't eat it on Android.
+    if (useWindowOpenPath) {
       pdf.autoPrint();
       const url = URL.createObjectURL(pdf.output('blob'));
-      const w = window.open(url, '_blank');
-      if (!w) {
-        // Popup blocked → fall back to direct download
-        const a = document.createElement('a');
-        a.href = url; a.download = 'certs.pdf';
-        a.style.display = 'none'; document.body.appendChild(a);
-        a.click();
-        setTimeout(() => a.remove(), 5000);
+      if (prePoppedWindow && !prePoppedWindow.closed) {
+        try { prePoppedWindow.location = url; }
+        catch (_) {
+          // Some browsers block cross-origin nav on about:blank → fall back
+          // to opening a fresh window. May be popup-blocked at this point.
+          const w = window.open(url, '_blank');
+          if (!w) certsPrintAllFallbackDownload(url);
+        }
+      } else {
+        // Popup blocked entirely → direct download as last resort.
+        certsPrintAllFallbackDownload(url);
       }
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } else {
@@ -2576,6 +2594,10 @@ async function certsPrintAll() {
       }, 5 * 60_000);
     }
   } catch (e) {
+    // Clean up the pre-popped tab so the user isn't staring at about:blank.
+    if (prePoppedWindow && !prePoppedWindow.closed) {
+      try { prePoppedWindow.close(); } catch (_) {}
+    }
     alert('Could not print: ' + (e.message || String(e)));
     certsDbg('printAll error: ' + (e.message || e));
   } finally {
@@ -2584,11 +2606,21 @@ async function certsPrintAll() {
   }
 }
 
+function certsPrintAllFallbackDownload(url) {
+  const a = document.createElement('a');
+  a.href = url; a.download = 'certs.pdf';
+  a.style.display = 'none'; document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 5000);
+}
+
 // ── Save All / Download All — html-to-image per cert ──
 function certHasWebShareFiles() {
   try {
+    const mime = certIsIOS() ? 'image/jpeg' : 'image/png';
+    const ext  = certIsIOS() ? '.jpg' : '.png';
     return navigator.canShare && navigator.canShare({
-      files: [new File(['x'], 'x.png', { type: 'image/png' })],
+      files: [new File(['x'], 'x' + ext, { type: mime })],
     });
   } catch (e) { return false; }
 }
@@ -2647,12 +2679,59 @@ async function certIframeReady(ifr) {
 }
 
 /* Detect desktop vs mobile reliably. Web Share API on desktop opens an
-   awkward OS share dialog with mostly-empty targets; we'd rather ZIP. */
+   awkward OS share dialog with mostly-empty targets; we'd rather ZIP.
+
+   HARDENED in 1.21 (per 2026 browser matrix research):
+   - Touch-alone is no longer enough — Surface Pro, ChromeOS tablet mode,
+     and macOS+Sidecar all report maxTouchPoints>1 and ontouchstart, but
+     have a real mouse/trackpad and should get the desktop ZIP flow.
+   - Require either an explicit Mobile/iPhone/iPad/iPod/Android UA token,
+     OR an iPad pretending to be Mac (Macintosh + touch + no fine pointer).
+   - matchMedia('(pointer: fine)') is the disambiguator: real touch-only
+     devices return false; Surface/Sidecar return true.   */
 function certIsMobileLike() {
   const ua = navigator.userAgent || '';
   if (/iPhone|iPad|iPod|Android|Mobile/i.test(ua)) return true;
-  if ('ontouchstart' in window && navigator.maxTouchPoints > 1) return true;
+  // iPadOS 13+ masquerades as Macintosh. Real iPad has no precise pointer.
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) {
+    try {
+      if (!window.matchMedia('(pointer: fine)').matches) return true;
+    } catch (_) { /* matchMedia missing → treat as mobile (safer fallback) */ return true; }
+  }
   return false;
+}
+
+/* True iff the browser is iOS / iPadOS specifically. JPEG sharing is the
+   reliable path to Photos on these (PNG often only offers "Save to Files"
+   per WebKit limitation; Apple thread 729782). */
+function certIsIOS() {
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod|CriOS|FxiOS|EdgiOS/i.test(ua)) return true;
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) {
+    try { if (!window.matchMedia('(pointer: fine)').matches) return true; }
+    catch (_) { return true; }
+  }
+  return false;
+}
+
+/* True iff the browser is Firefox (any OS). Firefox treats inline PDF
+   blob iframes as cross-origin (resource://pdf.js) so
+   iframe.contentWindow.print() either throws SecurityError or silently
+   no-ops (Bugzilla #1376151, still open in 2026). */
+function certIsFirefox() {
+  return /Firefox|FxiOS/i.test(navigator.userAgent || '');
+}
+
+/* True iff the browser is desktop Safari (macOS, not iOS). Safari freezes
+   when you call print() on an iframe loaded with a PDF blob (Apple
+   Community 252821086, long-standing). Use window.open path instead. */
+function certIsDesktopSafari() {
+  const ua = navigator.userAgent || '';
+  if (!/Safari/i.test(ua)) return false;
+  if (/Chrome|Chromium|Edg|OPR|Firefox|CriOS|FxiOS/i.test(ua)) return false;
+  if (/iPhone|iPad|iPod/i.test(ua)) return false;
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) return false;
+  return true;
 }
 
 /* True iff the browser is WebKit/Safari (incl. iOS Safari, iPadOS Safari,
@@ -2668,6 +2747,36 @@ function certIsWebKit() {
   return false;
 }
 
+/* Convert a PNG blob to JPEG via canvas. iOS Save All needs this because
+   WebKit's share sheet often omits the "Save to Photos" target when the
+   shared file is PNG (only "Save to Files" appears). JPEG always exposes
+   the Photos target. Quality 0.92 keeps file size reasonable with no
+   perceptible degradation on a 2x cert at 8.5"x11". */
+async function certBlobPngToJpeg(blob, quality) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = url;
+    if (img.decode) { try { await img.decode(); } catch (_) {} }
+    else await new Promise(r => { img.onload = r; img.onerror = r; });
+    const canvas = document.createElement('canvas');
+    canvas.width  = img.naturalWidth  || 1056;
+    canvas.height = img.naturalHeight || 816;
+    const ctx = canvas.getContext('2d');
+    // White background under JPEG (no alpha) so transparent edges (rare)
+    // don't paint as black.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    return await new Promise((res, rej) => {
+      canvas.toBlob(b => b ? res(b) : rej(new Error('toBlob failed')),
+                    'image/jpeg', quality || 0.92);
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 /* html-to-image foreignObject + WebKit bug: the first toPng/toBlob call on
    a node containing background-image data URIs paints the background as
    transparent because Safari's SVG image-decoder cache isn't populated yet
@@ -2679,12 +2788,17 @@ function certIsWebKit() {
 async function certHtmlToBlobSafe(node, opts) {
   if (certIsWebKit()) {
     try { await window.htmlToImage.toBlob(node, opts); } catch (_) {}
+    // 100ms gap between calls — html-to-image #292 reports back-to-back
+    // calls on Safari sometimes BOTH return blank. Yielding the event
+    // loop lets the SVG decoder finish populating.
+    await new Promise(r => setTimeout(r, 100));
   }
   return window.htmlToImage.toBlob(node, opts);
 }
 async function certHtmlToPngSafe(node, opts) {
   if (certIsWebKit()) {
     try { await window.htmlToImage.toPng(node, opts); } catch (_) {}
+    await new Promise(r => setTimeout(r, 100));   // see toBlobSafe note
   }
   return window.htmlToImage.toPng(node, opts);
 }
@@ -2700,13 +2814,18 @@ async function certsSaveAll() {
     if (!feed) throw new Error('Feed not ready');
     const iframes = feed.querySelectorAll('iframe.cert-iframe');
 
+    // iOS share sheet only reliably shows "Save N Images to Photos" when
+    // the shared files are JPEG. PNG often gets "Save to Files" only
+    // (WebKit limitation per Apple thread 729782). Convert before share.
+    // Desktop ZIP path keeps PNG (lossless, no need to transcode).
+    const useJpeg = certIsIOS();
     const files = [];
     for (let i = 0; i < iframes.length; i++) {
       btn.textContent = 'Preparing ' + (i + 1) + ' of ' + iframes.length + '…';
       const ifr = iframes[i];
       const c = _certsState.activeFeed[i];
       await certIframeReady(ifr);
-      const blob = await certHtmlToBlobSafe(ifr.contentDocument.body, {
+      let blob = await certHtmlToBlobSafe(ifr.contentDocument.body, {
         pixelRatio: 2,
         cacheBust: false,            // data URIs don't need cache-bust + saves time
         backgroundColor: '#ffffff',
@@ -2714,10 +2833,13 @@ async function certsSaveAll() {
         skipFonts: true,
       });
       if (!blob) throw new Error('snapshot ' + (i + 1) + ' produced no data');
+      if (useJpeg) blob = await certBlobPngToJpeg(blob, 0.92);
       const safe = (c.sp_type || '').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
       const div  = c.division_name ? '-' + c.division_name.replace(/[^a-z0-9]+/gi, '-').toLowerCase() : '';
-      const fname = c.tier + '-' + safe + div + '.png';
-      files.push(new File([blob], fname, { type: 'image/png' }));
+      const ext  = useJpeg ? 'jpg' : 'png';
+      const mime = useJpeg ? 'image/jpeg' : 'image/png';
+      const fname = c.tier + '-' + safe + div + '.' + ext;
+      files.push(new File([blob], fname, { type: mime }));
     }
 
     // Route: mobile → Web Share (Save Images to Photos). Desktop → ZIP download.
