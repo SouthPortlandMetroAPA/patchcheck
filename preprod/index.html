@@ -1092,7 +1092,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.26';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.27';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -1834,12 +1834,16 @@ function buildEvents(bdRows, skunks, patches, optoutTypes) {
   });
 }
 
-async function handleSearch() {
+async function handleSearch(opts) {
+  opts = opts || {};
   var input = document.getElementById('memberInput');
   var raw = (input.value || '').trim();
   var sessionId = parseInt(document.getElementById('sessionSelect').value, 10);
 
-  showMessage(null, '');
+  // preserveMessage: don't wipe the "Loading…" banner the session-change
+  // handler set before calling us. Without this the banner flickered off
+  // immediately so the user thought nothing was happening.
+  if (!opts.preserveMessage) showMessage(null, '');
   clearDashboard();
 
   if (!raw) {
@@ -2028,7 +2032,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         //  session — that's fine, we still want the swap to render.)
         input.value = saved;
         await loadSessionMeta(id);
-        await handleSearch();
+        await handleSearch({ preserveMessage: true });
       } else {
         // No player shown yet → just preload session metadata.
         await loadSessionMeta(id);
