@@ -1025,7 +1025,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.12';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.13';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -2040,12 +2040,17 @@ document.addEventListener('DOMContentLoaded', async function () {
         .certs-title { font-size: 1.05rem; }
       }
       @media (min-width: 1100px) {
-        /* Desktop — 2-column cert grid */
+        /* Desktop — 2-column cert grid.
+           align-items: start prevents CSS grid's default `stretch` from
+           sizing a landscape card's height to match a taller portrait
+           card next to it (which left a blank white band below the
+           landscape iframe). */
         .certs-feed {
           max-width: 1280px;
           display: grid;
           grid-template-columns: 1fr 1fr;
           gap: 24px;
+          align-items: start;
         }
         .certs-actions-bar { position: sticky; top: 0; z-index: 2; }
       }
