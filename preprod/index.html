@@ -248,7 +248,50 @@
       #dashboard.session-loading {
         opacity: 0.35;
         pointer-events: none;
-        transition: opacity 120ms ease;
+        transition: opacity 140ms ease;
+      }
+      /* Subtle moving gradient stripe along the top of the dashboard
+         while a session swap is in flight — gives kinetic feedback even
+         when the data fetch is instant (cache hit). Respects users who
+         have requested reduced motion. */
+      #dashboard.session-shimmer {
+        position: relative;
+      }
+      #dashboard.session-shimmer::before {
+        content: '';
+        position: absolute; left: 0; right: 0; top: 0; height: 3px;
+        background: linear-gradient(90deg,
+          transparent 0%,
+          var(--color-burgundy, #8c0033) 25%,
+          var(--color-blue, #1d3aa3) 50%,
+          var(--color-burgundy, #8c0033) 75%,
+          transparent 100%);
+        background-size: 200% 100%;
+        animation: pcSessionShimmer 1100ms linear infinite;
+        z-index: 10; pointer-events: none;
+        border-radius: 4px 4px 0 0;
+      }
+      @keyframes pcSessionShimmer {
+        from { background-position: 100% 0; }
+        to   { background-position: -100% 0; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #dashboard.session-shimmer::before { animation: none; }
+      }
+      /* Inline 12px spinner that can sit next to message text. */
+      .msg-spinner {
+        display: inline-block;
+        width: 12px; height: 12px;
+        margin-right: 8px;
+        vertical-align: -2px;
+        border: 2px solid rgba(140, 0, 51, 0.28);
+        border-top-color: rgba(140, 0, 51, 0.85);
+        border-radius: 50%;
+        animation: pcSpin 0.85s linear infinite;
+      }
+      @keyframes pcSpin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) {
+        .msg-spinner { animation: none; }
       }
       /* Small italic chip that hovers above the dashboard while the
          background "load all past sessions" loop is running. */
@@ -1049,7 +1092,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.25';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.26';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -1189,13 +1232,21 @@ function setLoading(on) {
   btn.disabled = on;
   btn.textContent = on ? 'SEARCHING...' : 'SEARCH';
 }
-function showMessage(type, text) {
+function showMessage(type, text, withSpinner) {
   var c = document.getElementById('messageContainer');
   c.innerHTML = '';
   if (!text) return;
   var d = document.createElement('div');
   d.className = 'msg ' + (type === 'error' ? 'msg-error' : 'msg-info');
-  d.textContent = text;
+  if (withSpinner) {
+    var s = document.createElement('span');
+    s.className = 'msg-spinner';
+    s.setAttribute('aria-hidden', 'true');
+    d.appendChild(s);
+  }
+  var t = document.createElement('span');
+  t.textContent = text;
+  d.appendChild(t);
   c.appendChild(d);
 }
 function showMemberPill(name) {
@@ -1940,35 +1991,66 @@ document.addEventListener('DOMContentLoaded', async function () {
     var id = parseInt(sel.value, 10);
     if (isNaN(id)) return;
 
-    // Give the user immediate feedback that the swap is in flight:
-    //   • dim the stale dashboard so they don't read old numbers as new
-    //   • show a "Loading <session name>…" info banner
-    //   • lock the dropdown so they can't queue a second swap mid-fetch
+    // ── Loading-state UX (rewritten 1.26 after debugging 9907 case) ──
+    //   Old version checked `allResults.length` to decide whether to
+    //   re-run the search. 9907 has 0 SPs in Summer 2026 → length=0 →
+    //   handler skipped handleSearch entirely → user saw zero feedback
+    //   and a stale dashboard while the session-meta swap finished in
+    //   microseconds. Use _lastSearchMember (set by handleSearch on
+    //   ANY successful lookup, regardless of count) so the re-render
+    //   fires for zero-SP players too.
+    //
+    //   Even on a cache hit, hold the loading state for a minimum
+    //   ~280 ms so the user perceives the swap as an intentional
+    //   action. Per 2026 Nielsen-Norman research, transitions <100 ms
+    //   read as "instant" (no feedback) and 100–1000 ms reads as
+    //   "responsive"; we land in the responsive band.
     var sessionName = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : 'session';
     var dash = document.getElementById('dashboard');
-    if (dash) dash.classList.add('session-loading');
-    showMessage('info', 'Loading ' + sessionName + '…');
+    if (dash) {
+      dash.classList.add('session-loading');
+      dash.classList.add('session-shimmer');  // subtle pulsing border
+    }
+    showMessage('info', 'Loading ' + sessionName + '…', /*spinner=*/true);
     sel.disabled = true;
 
+    var minHoldMs   = 280;
+    var startedAt   = Date.now();
+    var hadPlayer = !!_lastSearchMember;
+
     try {
-      var hadPlayer = !!allResults.length;
       var saved = '';
       try { saved = sessionStorage.getItem('patchcheck_lastInput') || ''; } catch (e) {}
 
       if (hadPlayer && saved) {
         // Player is on screen → re-run search against new session.
+        // (allResults may be empty if the player had no SPs in the prior
+        //  session — that's fine, we still want the swap to render.)
         input.value = saved;
         await loadSessionMeta(id);
-        await handleSearch();  // handleSearch clears its own message + setLoading state
+        await handleSearch();
       } else {
         // No player shown yet → just preload session metadata.
         await loadSessionMeta(id);
-        showMessage('info', '');
       }
+      // Min-hold so cache-hits don't flash invisibly past the user.
+      var elapsed = Date.now() - startedAt;
+      if (elapsed < minHoldMs) {
+        await new Promise(function (r) { setTimeout(r, minHoldMs - elapsed); });
+      }
+      // Brief success confirmation (auto-clears).
+      showMessage('info', sessionName + ' loaded', /*spinner=*/false);
+      setTimeout(function () {
+        var c = document.getElementById('messageContainer');
+        if (c && c.textContent.indexOf(' loaded') >= 0) showMessage(null, '');
+      }, 1400);
     } catch (e) {
       showMessage('error', 'Could not load session: ' + (e.message || e));
     } finally {
-      if (dash) dash.classList.remove('session-loading');
+      if (dash) {
+        dash.classList.remove('session-loading');
+        dash.classList.remove('session-shimmer');
+      }
       sel.disabled = false;
     }
   });
