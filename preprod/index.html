@@ -1025,7 +1025,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.11';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.12';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -2501,10 +2501,17 @@ async function certsLoadLib(globalName, url) {
 }
 
 /* Wait for a cert iframe to fully render its assets (watermark + APA logo
-   + any inline data URIs). First couple of phone-saved PNGs were missing
-   the watermark — html-to-image was snapshotting before background-image
-   decoding finished. Belt-and-suspenders: doc.readyState, img.complete,
-   double rAF (forces a paint), and a small idle delay for data-URI decode. */
+   + any inline data URIs).
+
+   The first 2 phone-saved PNGs were missing the sakura watermark. Root
+   cause: the watermark is a CSS background-image, NOT an <img> tag, so
+   img.complete tells us NOTHING about whether it's been decoded yet. The
+   double-rAF + 250 ms tweak in 1.x masked the issue once the browser's
+   image-decode pipeline warmed up, but only flakily.
+
+   Real fix: explicitly Image.decode() the watermark data URI inside the
+   iframe BEFORE snapshotting. img.decode() resolves only after the bitmap
+   is fully decoded and ready to paint — exactly the guarantee we need. */
 async function certIframeReady(ifr) {
   const doc = ifr.contentDocument;
   if (!doc) return;
@@ -2518,10 +2525,23 @@ async function certIframeReady(ifr) {
       ? Promise.resolve()
       : new Promise(res => { img.onload = res; img.onerror = res; })
   ));
-  // Force two paint cycles so background-image decoding settles
+  // Force the CSS background-image watermark to decode INSIDE this iframe.
+  // We create a temp Image in the iframe's own window so the decode happens
+  // in the same browsing context that html-to-image is about to snapshot.
+  const ifrWin = ifr.contentWindow;
+  if (ifrWin && ifrWin.Image && _certAssetCache.watermark) {
+    try {
+      const pre = new ifrWin.Image();
+      pre.src = _certAssetCache.watermark;
+      if (pre.decode) {
+        await pre.decode();
+      } else {
+        await new Promise(res => { pre.onload = res; pre.onerror = res; });
+      }
+    } catch (_) { /* decode failure is non-fatal */ }
+  }
+  // One paint cycle so the layout reflects the freshly-decoded bitmap
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-  // Decode delay for the 486KB watermark data URI on first encounter
-  await new Promise(r => setTimeout(r, 250));
 }
 
 /* Detect desktop vs mobile reliably. Web Share API on desktop opens an
