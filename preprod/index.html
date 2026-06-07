@@ -974,7 +974,10 @@
 
 /* ── App identity ── */
 const APP_NAME    = 'PatchCheck';
-const APP_VERSION = '1.5';
+const APP_VERSION = '1.6';   // bump in lockstep with apa_core.apps row.
+                             // preprod runs at the same version as the live
+                             // DB; only bumps at promote-time. Otherwise the
+                             // auto-updater (below) would loop on "Updating".
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
