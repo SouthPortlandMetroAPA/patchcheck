@@ -1025,7 +1025,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.17';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.18';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -2254,7 +2254,7 @@ async function certBuildHtml(cert, ctx) {
   let achScope    = '';
   if (isSlam) {
     achHeadline = cert.sp_label;                 // e.g. "9 Ball Mini-Slam" — no count
-    achScope    = 'Across All Divisions';
+    achScope    = '';                            // slam certs: no division line at all
   } else if (cert.tier === 'the_most') {
     achHeadline = 'The Most ' + cert.sp_label + ' (' + cert.cert_count + ')';
     achScope    = (cert.division_name || '') + ' Division';
@@ -2288,10 +2288,16 @@ async function certBuildHtml(cert, ctx) {
       ''
     );
   }
-  // Slam cleanup on Exceptional-template path (if a slam ever routes there):
-  // strip leading whitespace + dangling " ()" left by empty ACH_QUANTITY /
-  // ACH_COUNT placeholders.
+  // Slam cleanup:
+  //   • strip the now-empty .ach-division div (we set ACH_SCOPE='' for slams
+  //     so the cert has NO division line — saves ~0.3" vertical space and
+  //     visually matches the "league-wide, doesn't belong to any division"
+  //     semantics of a slam)
+  //   • on the Exceptional-template path (defensive — slams now route through
+  //     the_most), strip leading whitespace + dangling " ()" left by empty
+  //     ACH_QUANTITY / ACH_COUNT placeholders.
   if (isSlam) {
+    html = html.replace(/<div class="ach-division">\s*<\/div>\s*/g, '');
     html = html.replace(/<div class="ach-line">\s+/g, '<div class="ach-line">');
     html = html.replace(/\s*\(\s*\)/g, '');
   }
@@ -2507,21 +2513,60 @@ async function certsPrintAll() {
       );
     }
 
-    btn.textContent = 'Opening…';
-    pdf.autoPrint();   // PDF readers auto-show the Print dialog on open
-    const url = URL.createObjectURL(pdf.output('blob'));
-    const w = window.open(url, '_blank');
-    if (!w) {
-      // Popup blocked → fall back to a direct download
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'certs.pdf';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => a.remove(), 5000);
+    btn.textContent = 'Opening print dialog…';
+    // Desktop browsers default to "open PDFs in new tab" for some users and
+    // "download PDFs" for others — and the second group never sees a print
+    // dialog, just a download. We bypass that preference by embedding the
+    // PDF in a hidden iframe and calling print() directly on its window.
+    // Same-origin Blob URLs are scriptable, so this works in Chrome/Edge/
+    // Firefox/Safari without popup-blocker drama.
+    //
+    // Mobile: stay on the new-tab path. iOS Safari doesn't render PDFs
+    // inside iframes reliably (it offers Save to Files / Books / etc.
+    // instead), and iframe.contentWindow.print() often no-ops there.
+    if (certIsMobileLike()) {
+      pdf.autoPrint();
+      const url = URL.createObjectURL(pdf.output('blob'));
+      const w = window.open(url, '_blank');
+      if (!w) {
+        // Popup blocked → fall back to direct download
+        const a = document.createElement('a');
+        a.href = url; a.download = 'certs.pdf';
+        a.style.display = 'none'; document.body.appendChild(a);
+        a.click();
+        setTimeout(() => a.remove(), 5000);
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } else {
+      const url = URL.createObjectURL(pdf.output('blob'));
+      const ifr = document.createElement('iframe');
+      ifr.style.cssText = 'position:fixed;right:-10000px;top:0;width:1px;height:1px;border:0;opacity:0;';
+      ifr.src = url;
+      let didPrint = false;
+      ifr.onload = () => {
+        if (didPrint) return;
+        didPrint = true;
+        // Some browsers fire load before the embedded PDF viewer is ready;
+        // give it one frame, then print.
+        setTimeout(() => {
+          try {
+            ifr.contentWindow.focus();
+            ifr.contentWindow.print();
+          } catch (e) {
+            // Cross-origin or print() blocked — fall back to opening the PDF
+            // directly so the user can print from the viewer.
+            window.open(url, '_blank');
+          }
+        }, 150);
+      };
+      document.body.appendChild(ifr);
+      // Don't yank the iframe too early — the print dialog stays attached to
+      // its window. 5 minutes is well past any reasonable print interaction.
+      setTimeout(() => {
+        try { document.body.removeChild(ifr); } catch (_) {}
+        URL.revokeObjectURL(url);
+      }, 5 * 60_000);
     }
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   } catch (e) {
     alert('Could not print: ' + (e.message || String(e)));
     certsDbg('printAll error: ' + (e.message || e));
