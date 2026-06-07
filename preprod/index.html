@@ -242,6 +242,14 @@
       /* ── Dashboard ── */
 
       #dashboard { display: none; }
+      /* While a session swap is in flight, dim the prior session's
+         dashboard so the user sees that the numbers are stale and
+         being re-fetched (not "magically updated already"). */
+      #dashboard.session-loading {
+        opacity: 0.35;
+        pointer-events: none;
+        transition: opacity 120ms ease;
+      }
 
       /* ── Stats Bar ── */
 
@@ -1025,7 +1033,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.23';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.24';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -1805,17 +1813,42 @@ document.addEventListener('DOMContentLoaded', async function () {
     var v = input.value.trim();
     if (v && !document.getElementById('goButton').disabled) handleSearch();
   });
-  document.getElementById('sessionSelect').addEventListener('change', function () {
-    var id = parseInt(this.value, 10);
+  document.getElementById('sessionSelect').addEventListener('change', async function () {
+    var sel = this;
+    var id = parseInt(sel.value, 10);
     if (isNaN(id)) return;
-    if (allResults.length) {
-      /* If a player is already displayed, re-run the search against the
-         new session so the dashboard rolls over without a manual reload. */
+
+    // Give the user immediate feedback that the swap is in flight:
+    //   • dim the stale dashboard so they don't read old numbers as new
+    //   • show a "Loading <session name>…" info banner
+    //   • lock the dropdown so they can't queue a second swap mid-fetch
+    var sessionName = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : 'session';
+    var dash = document.getElementById('dashboard');
+    if (dash) dash.classList.add('session-loading');
+    showMessage('info', 'Loading ' + sessionName + '…');
+    sel.disabled = true;
+
+    try {
+      var hadPlayer = !!allResults.length;
       var saved = '';
       try { saved = sessionStorage.getItem('patchcheck_lastInput') || ''; } catch (e) {}
-      if (saved) { input.value = saved; loadSessionMeta(id).then(handleSearch); return; }
+
+      if (hadPlayer && saved) {
+        // Player is on screen → re-run search against new session.
+        input.value = saved;
+        await loadSessionMeta(id);
+        await handleSearch();  // handleSearch clears its own message + setLoading state
+      } else {
+        // No player shown yet → just preload session metadata.
+        await loadSessionMeta(id);
+        showMessage('info', '');
+      }
+    } catch (e) {
+      showMessage('error', 'Could not load session: ' + (e.message || e));
+    } finally {
+      if (dash) dash.classList.remove('session-loading');
+      sel.disabled = false;
     }
-    loadSessionMeta(id);
   });
 
   await loadSessions();
