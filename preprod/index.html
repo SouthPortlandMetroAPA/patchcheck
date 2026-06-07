@@ -1025,7 +1025,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.14';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.15';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -2225,12 +2225,16 @@ function seasonLabelFromSessionName(name) {
 async function certBuildHtml(cert, ctx) {
   await certEnsureAssets();
   const tpl = await certEnsureTemplate(cert.tier);
+  // Mini-Slams and Grand Slams are binary achievements — a player either
+  // got one in the session or didn't. A count of "(1)" is redundant and
+  // a count of >1 is impossible. Suppress the count for these sp_types.
+  const isSlam = cert.sp_type === '8m' || cert.sp_type === '9m' || cert.sp_type === 'g';
   let html = certSubstitute(tpl, {
     PLAYER_FIRST:        ctx.player_first || '',
     PLAYER_LAST:         ctx.player_last  || '',
     ACH_TYPE:            cert.sp_label,
-    ACH_QUANTITY:        certCountWord(cert.cert_count) + ' (' + cert.cert_count + ')',
-    ACH_COUNT:           String(cert.cert_count),
+    ACH_QUANTITY:        isSlam ? '' : (certCountWord(cert.cert_count) + ' (' + cert.cert_count + ')'),
+    ACH_COUNT:           isSlam ? '' : String(cert.cert_count),
     TEAM_NAME:           cert.team_name     || '',
     DIVISION_NAME:       cert.division_name || '',
     SESSION:             ctx.session_label,
@@ -2250,6 +2254,14 @@ async function certBuildHtml(cert, ctx) {
       /<div class="ach-line">\s*-\s*Division<\/div>\s*/,
       ''
     );
+  }
+  // Slam cleanup: strip leading whitespace in ach-line / ach-headline that
+  // now starts with the empty ACH_QUANTITY placeholder, and strip the
+  // dangling " ( )" left behind by an empty ACH_COUNT in headlines.
+  if (isSlam) {
+    html = html.replace(/<div class="ach-line">\s+/g, '<div class="ach-line">');
+    html = html.replace(/<div class="ach-headline">\s+/g, '<div class="ach-headline">');
+    html = html.replace(/\s*\(\s*\)/g, '');
   }
   return html;
 }
