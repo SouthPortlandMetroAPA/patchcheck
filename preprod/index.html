@@ -1025,10 +1025,14 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.8';   // matches apa_core.apps.PatchCheck-preprod
-                               // 1.8 = monkey-patch showMemberPill so the
-                               //       precheck fires reliably; plus optional
-                               //       ?certdebug strip surfaces every step
+const APP_VERSION   = '1.9';   // matches apa_core.apps.PatchCheck-preprod
+                               // 1.9 = (a) edge-to-edge print CSS (@page+html/body
+                               //       margin:0), (b) strip empty "- Division"
+                               //       line on Outstanding/Exceptional certs,
+                               //       (c) remove the bottom meta banner,
+                               //       (d) wait for iframe paint before snapshot
+                               //       so the watermark is never missing on save,
+                               //       (e) route desktop to ZIP (not Web Share)
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -2046,22 +2050,38 @@ document.addEventListener('DOMContentLoaded', async function () {
         .certs-actions-bar { position: sticky; top: 0; z-index: 2; }
       }
 
-      /* ── Print layout: hidden until window.print() runs. The print root
-             holds one cert-print-page per cert. Each page contains an iframe
-             at native page size (8.5×11 portrait or 11×8.5 landscape). The
-             browser routes each page to the correct @page rule by named
-             page (cert-portrait vs cert-landscape). ── */
+      /* ── Print layout: hidden until window.print() runs. Edge-to-edge
+             output requires (a) @page margin:0 (Chrome/Edge respect this),
+             (b) html/body margin:0 to defeat the browser's default 8px,
+             (c) the print container at native page dimensions. The user
+             must also select "Margins: None" in the print dialog —
+             browsers won't auto-pick that. ── */
       .certs-print-root { display: none; }
       @media print {
+        @page { margin: 0 !important; padding: 0 !important; }
+        @page cert-portrait  { size: letter portrait;  margin: 0 !important; }
+        @page cert-landscape { size: letter landscape; margin: 0 !important; }
+        html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
         body * { visibility: hidden; }
         .certs-print-root, .certs-print-root * { visibility: visible; }
-        .certs-print-root { display: block !important; position: absolute; inset: 0; }
-        .cert-print-page { page-break-after: always; }
-        .cert-print-page iframe.cert-iframe { transform: none !important; border: 0; display: block; }
+        .certs-print-root {
+          display: block !important;
+          position: absolute; top: 0; left: 0; right: 0;
+          margin: 0; padding: 0;
+        }
+        .cert-print-page {
+          margin: 0; padding: 0;
+          page-break-after: always;
+          break-after: page;
+          overflow: hidden;
+        }
+        .cert-print-page iframe.cert-iframe {
+          transform: none !important;
+          border: 0; margin: 0; padding: 0;
+          display: block;
+        }
         .cert-print-page.portrait  { page: cert-portrait;  width: 8.5in; height: 11in;  }
         .cert-print-page.landscape { page: cert-landscape; width: 11in;  height: 8.5in; }
-        @page cert-portrait  { size: letter portrait;  margin: 0; }
-        @page cert-landscape { size: letter landscape; margin: 0; }
       }
     </style>
 
@@ -2200,7 +2220,7 @@ function seasonLabelFromSessionName(name) {
 async function certBuildHtml(cert, ctx) {
   await certEnsureAssets();
   const tpl = await certEnsureTemplate(cert.tier);
-  return certSubstitute(tpl, {
+  let html = certSubstitute(tpl, {
     PLAYER_FIRST:        ctx.player_first || '',
     PLAYER_LAST:         ctx.player_last  || '',
     ACH_TYPE:            cert.sp_label,
@@ -2214,6 +2234,18 @@ async function certBuildHtml(cert, ctx) {
     APA_LOGO_DATAURI:    _certAssetCache.logo,
     WATERMARK_DATAURI:   _certAssetCache.watermark,
   });
+  // The portrait Outstanding template has a "{{TEAM_NAME}} - {{DIVISION_NAME}}
+  // Division" line that we DON'T want when both are empty (which is always
+  // the case for player-level Outstanding aggregates and for Exceptional
+  // league-wide tier). The template's :has(.req:empty) CSS rule doesn't
+  // fire reliably across browsers, so strip the line surgically here.
+  if (!cert.division_name && !cert.team_name) {
+    html = html.replace(
+      /<div class="ach-line"><span class="req"><\/span>\s*-\s*<span class="req"><\/span>\s*Division<\/div>\s*/,
+      ''
+    );
+  }
+  return html;
 }
 
 // ── Iframe factory: a cert in a sandbox sized to native print dimensions ──
@@ -2343,8 +2375,8 @@ async function certsLoadFeed(sessionId, sessionName) {
     const wrap = document.createElement('div');
     wrap.className = 'cert-card';
     const isLs = CERT_TIER_IS_LANDSCAPE[c.tier];
-    wrap.innerHTML = `<div class="cert-iframe-wrap ${isLs ? 'landscape' : 'portrait'}"></div>
-      <div class="cert-meta">${escapeHtml(CERT_TIER_LABEL[c.tier] || c.tier)} — ${escapeHtml(c.sp_label)} (${c.cert_count})${c.division_name ? ' — ' + escapeHtml(c.division_name) + ' Division' : ''}</div>`;
+    // No bottom meta banner — the cert design is self-explanatory.
+    wrap.innerHTML = `<div class="cert-iframe-wrap ${isLs ? 'landscape' : 'portrait'}"></div>`;
     feed.appendChild(wrap);
     const html = await certBuildHtml(c, ctx);
     const iframe = certBuildIframe(html, isLs);
@@ -2381,15 +2413,20 @@ async function certsPrintAll() {
     date_str:      new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }),
   };
 
+  const printIframes = [];
   for (const c of _certsState.activeFeed) {
     const html = await certBuildHtml(c, ctx);
     const page = document.createElement('div');
     page.className = 'cert-print-page ' + (CERT_TIER_IS_LANDSCAPE[c.tier] ? 'landscape' : 'portrait');
-    page.appendChild(certBuildIframe(html, CERT_TIER_IS_LANDSCAPE[c.tier]));
+    const ifr = certBuildIframe(html, CERT_TIER_IS_LANDSCAPE[c.tier]);
+    page.appendChild(ifr);
     root.appendChild(page);
+    printIframes.push(ifr);
   }
-  // Give iframes a tick to render before opening the print dialog
-  await new Promise(r => setTimeout(r, 250));
+  // Wait for EVERY iframe to fully render (watermark + APA logo + paints)
+  // before opening the print dialog — otherwise some pages print without
+  // the background watermark.
+  await Promise.all(printIframes.map(certIframeReady));
   window.print();
 }
 
@@ -2411,53 +2448,101 @@ async function certsLoadLib(globalName, url) {
   });
 }
 
+/* Wait for a cert iframe to fully render its assets (watermark + APA logo
+   + any inline data URIs). First couple of phone-saved PNGs were missing
+   the watermark — html-to-image was snapshotting before background-image
+   decoding finished. Belt-and-suspenders: doc.readyState, img.complete,
+   double rAF (forces a paint), and a small idle delay for data-URI decode. */
+async function certIframeReady(ifr) {
+  const doc = ifr.contentDocument;
+  if (!doc) return;
+  if (doc.readyState !== 'complete') {
+    await new Promise(res => ifr.addEventListener('load', res, { once: true }));
+  }
+  // All <img> tags in the cert (the APA logo at minimum)
+  const imgs = Array.from(doc.querySelectorAll('img'));
+  await Promise.all(imgs.map(img =>
+    img.complete && img.naturalWidth > 0
+      ? Promise.resolve()
+      : new Promise(res => { img.onload = res; img.onerror = res; })
+  ));
+  // Force two paint cycles so background-image decoding settles
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  // Decode delay for the 486KB watermark data URI on first encounter
+  await new Promise(r => setTimeout(r, 250));
+}
+
+/* Detect desktop vs mobile reliably. Web Share API on desktop opens an
+   awkward OS share dialog with mostly-empty targets; we'd rather ZIP. */
+function certIsMobileLike() {
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod|Android|Mobile/i.test(ua)) return true;
+  if ('ontouchstart' in window && navigator.maxTouchPoints > 1) return true;
+  return false;
+}
+
 async function certsSaveAll() {
   if (!_certsState.activeFeed.length) return;
   const btn = certsEl('certsSaveAll');
   const orig = btn.textContent;
-  btn.textContent = 'Preparing…';
   btn.disabled = true;
   try {
     await certsLoadLib('htmlToImage', 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/dist/html-to-image.min.js');
-    const files = [];
     const feed = certsEl('certsFeedRoot');
     if (!feed) throw new Error('Feed not ready');
     const iframes = feed.querySelectorAll('iframe.cert-iframe');
+
+    const files = [];
     for (let i = 0; i < iframes.length; i++) {
+      btn.textContent = 'Preparing ' + (i + 1) + ' of ' + iframes.length + '…';
       const ifr = iframes[i];
       const c = _certsState.activeFeed[i];
-      // html-to-image runs against the iframe's document.body (where the
-      // cert lives). Result is a Blob.
+      await certIframeReady(ifr);
       const blob = await window.htmlToImage.toBlob(ifr.contentDocument.body, {
         pixelRatio: 2,
-        cacheBust: true,
+        cacheBust: false,            // data URIs don't need cache-bust + saves time
         backgroundColor: '#ffffff',
+        // Some browsers fail to embed cross-origin web fonts; skip to avoid hangs.
+        skipFonts: true,
       });
-      const safe = c.sp_type.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+      if (!blob) throw new Error('snapshot ' + (i + 1) + ' produced no data');
+      const safe = (c.sp_type || '').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
       const div  = c.division_name ? '-' + c.division_name.replace(/[^a-z0-9]+/gi, '-').toLowerCase() : '';
-      const fname = `${c.tier}-${safe}${div}.png`;
+      const fname = c.tier + '-' + safe + div + '.png';
       files.push(new File([blob], fname, { type: 'image/png' }));
     }
-    if (certHasWebShareFiles()) {
+
+    // Route: mobile → Web Share (Save Images to Photos). Desktop → ZIP download.
+    if (certIsMobileLike() && certHasWebShareFiles()) {
+      btn.textContent = 'Sharing…';
       await navigator.share({
         files,
         title: 'My APA Certificates',
         text: 'SPM ' + (_certsState.activeSession ? _certsState.activeSession.name : '') + ' certificates',
       });
     } else {
+      btn.textContent = 'Zipping…';
       await certsLoadLib('JSZip', 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
       const zip = new window.JSZip();
       for (const f of files) zip.file(f.name, f);
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
-      const sess = _certsState.activeSession ? _certsState.activeSession.name.replace(/\s+/g, '-').toLowerCase() : 'session';
-      a.href = url; a.download = 'certs-' + sess + '.zip';
-      document.body.appendChild(a); a.click();
-      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 5000);
+      const sess = _certsState.activeSession
+        ? _certsState.activeSession.name.replace(/\s+/g, '-').toLowerCase()
+        : 'session';
+      a.href = url;
+      a.download = 'certs-' + sess + '.zip';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 8000);
     }
   } catch (e) {
-    if (e && e.name !== 'AbortError') alert('Could not save: ' + (e.message || e));
+    if (e && e.name !== 'AbortError') {
+      alert('Could not save: ' + (e.message || String(e)));
+      certsDbg('saveAll error: ' + (e.message || e));
+    }
   } finally {
     btn.textContent = orig;
     btn.disabled = false;
