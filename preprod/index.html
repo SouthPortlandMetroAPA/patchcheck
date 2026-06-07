@@ -1025,9 +1025,10 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.7';   // matches apa_core.apps.PatchCheck-preprod
-                               // 1.7 = standardize "Updating" overlay to match Slate
-                               //       (canonical HTML/CSS pattern, no JS-built DOM)
+const APP_VERSION   = '1.8';   // matches apa_core.apps.PatchCheck-preprod
+                               // 1.8 = monkey-patch showMemberPill so the
+                               //       precheck fires reliably; plus optional
+                               //       ?certdebug strip surfaces every step
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -2463,37 +2464,126 @@ async function certsSaveAll() {
   }
 }
 
-/* ── Wire up handlers + observe the patch dashboard to drive the CTA ── */
+/* ── Diagnostic strip (only visible when ?certdebug in URL) ────────────
+   Surfaces what step the precheck reached. Lets us iterate without
+   browser devtools. Remove once the CTA reliably appears. */
+const CERT_DEBUG = /[?&]certdebug\b/.test(location.search);
+function certsDbg(msg) {
+  if (!CERT_DEBUG) return;
+  let el = document.getElementById('certsDbgStrip');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'certsDbgStrip';
+    el.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9998;'
+      + 'background:#111;color:#9fc;padding:6px 10px;font:11px/1.3 monospace;'
+      + 'max-height:35vh;overflow:auto;border-top:2px solid #c9a159;';
+    document.body.appendChild(el);
+  }
+  const t = new Date().toISOString().slice(11, 19);
+  el.innerHTML += '<div>[' + t + '] ' + String(msg).replace(/</g,'&lt;') + '</div>';
+  el.scrollTop = el.scrollHeight;
+  try { console.log('[certs]', msg); } catch (_) {}
+}
+
+/* ── Reliable precheck trigger: MONKEY-PATCH showMemberPill ────────────
+   The MutationObserver approach can miss style-attribute mutations on
+   some Chromium builds when the change is batched with text content
+   updates. showMemberPill is called DIRECTLY by handleSearch on every
+   successful lookup, so wrapping it is bulletproof. The observer stays
+   as a belt-and-suspenders fallback. */
+;(function installShowMemberPillHook() {
+  const orig = window.showMemberPill;
+  if (typeof orig !== 'function') {
+    certsDbg('FAIL: window.showMemberPill not defined yet at script-load — observer-only fallback');
+    return;
+  }
+  window.showMemberPill = function (name) {
+    try { orig(name); }
+    catch (e) { certsDbg('orig showMemberPill threw: ' + e.message); throw e; }
+    if (name) {
+      const raw = (document.getElementById('memberInput').value || '').trim();
+      certsDbg('hook: showMemberPill("' + name + '") raw="' + raw + '"');
+      _certsState = { member_number:null, player_first:null, player_last:null,
+                      sessions:[], totalCount:0, activeFeed:[], activeSession:null };
+      const wrap = document.getElementById('certsCtaWrap');
+      if (wrap) wrap.style.display = 'none';
+      if (raw) certsPrecheckSafe(raw);
+    } else {
+      const wrap = document.getElementById('certsCtaWrap');
+      if (wrap) wrap.style.display = 'none';
+    }
+  };
+  certsDbg('showMemberPill hook installed');
+})();
+
+/* Async-safe precheck wrapper — surfaces every step to the debug strip. */
+async function certsPrecheckSafe(raw) {
+  try {
+    certsDbg('precheck: start raw="' + raw + '"');
+    const wrap  = document.getElementById('certsCtaWrap');
+    const label = document.getElementById('certsCtaLabel');
+    if (!wrap || !label) { certsDbg('precheck: FAIL — CTA elements missing'); return; }
+
+    const player = await certsResolveMember(raw);
+    certsDbg('precheck: resolveMember → ' + (player ? JSON.stringify(player) : 'null'));
+    if (!player) return;
+
+    let sessions;
+    try {
+      sessions = await sbRpc('slate', 'player_cert_sessions',
+        { p_member_number: player.member_number });
+    } catch (e) {
+      certsDbg('precheck: player_cert_sessions threw — ' + e.message);
+      return;
+    }
+    certsDbg('precheck: sessions → ' + JSON.stringify(sessions));
+
+    const total = (sessions || []).reduce((a, s) => a + (s.cert_count || 0), 0);
+    certsDbg('precheck: totalCount=' + total);
+    if (total === 0) return;
+
+    _certsState.member_number = player.member_number;
+    _certsState.player_first  = player.player_first;
+    _certsState.player_last   = player.player_last;
+    _certsState.sessions      = sessions;
+    _certsState.totalCount    = total;
+
+    label.textContent = total === 1
+      ? 'View My Certificate'
+      : 'View My ' + total + ' Certificates';
+    wrap.style.display = 'block';           // explicit (was empty string)
+    certsDbg('precheck: SHOWING CTA → "' + label.textContent + '"');
+  } catch (e) {
+    certsDbg('precheck: uncaught — ' + (e.message || e));
+  }
+}
+
+/* ── Wire up overlay handlers + a redundant observer (safety net) ── */
 document.addEventListener('DOMContentLoaded', function () {
   certsEl('certsClose').addEventListener('click', certsClose);
   certsEl('certsRefresh').addEventListener('click', function () {
     const raw = (document.getElementById('memberInput').value || '').trim();
-    if (raw) certsPrecheck(raw);
+    if (raw) certsPrecheckSafe(raw);
   });
   certsEl('certsPrintAll').addEventListener('click', certsPrintAll);
   certsEl('certsSaveAll').addEventListener('click', certsSaveAll);
   certsEl('certsBtn').addEventListener('click', certsOpenFromCta);
 
-  // Observe memberPill (which the app toggles on every successful search):
-  // every change re-runs the pre-check with the current input. Falls back
-  // to hiding the CTA cleanly between searches.
+  // Belt-and-suspenders: observer kept as fallback for any path that
+  // bypasses showMemberPill (none today, but covers future divergence).
   const pill = document.getElementById('memberPill');
   if (pill) {
     const obs = new MutationObserver(() => {
       const visible = pill.style.display !== 'none' && pill.innerHTML.trim();
-      if (visible) {
+      if (visible && !_certsState.member_number) {
         const raw = (document.getElementById('memberInput').value || '').trim();
-        // Reset state for the new player and re-precheck
-        _certsState = { member_number:null, player_first:null, player_last:null,
-                        sessions:[], totalCount:0, activeFeed:[], activeSession:null };
-        certsEl('certsCtaWrap').style.display = 'none';
-        if (raw) certsPrecheck(raw);
-      } else {
-        certsEl('certsCtaWrap').style.display = 'none';
+        certsDbg('observer fallback firing');
+        if (raw) certsPrecheckSafe(raw);
       }
     });
     obs.observe(pill, { attributes:true, childList:true, subtree:true, attributeFilter:['style'] });
   }
+  certsDbg('DOMContentLoaded handlers wired (auto-trigger via showMemberPill hook)');
 });
     </script>
   </body>
