@@ -1025,14 +1025,14 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.9';   // matches apa_core.apps.PatchCheck-preprod
-                               // 1.9 = (a) edge-to-edge print CSS (@page+html/body
-                               //       margin:0), (b) strip empty "- Division"
-                               //       line on Outstanding/Exceptional certs,
-                               //       (c) remove the bottom meta banner,
-                               //       (d) wait for iframe paint before snapshot
-                               //       so the watermark is never missing on save,
-                               //       (e) route desktop to ZIP (not Web Share)
+const APP_VERSION   = '1.10';  // matches apa_core.apps.PatchCheck-preprod
+                               // 1.10 = Print All now generates a multi-page
+                               //        PDF with correct per-page orientation
+                               //        (Chrome's @page named-orientation rule
+                               //        rendered all pages portrait, scaling
+                               //        landscape certs to half-size). PDF
+                               //        opens with autoPrint → native print
+                               //        dialog → guaranteed edge-to-edge.
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -2399,35 +2399,86 @@ async function certsLoadFeed(sessionId, sessionName) {
   certsEl('certsSaveAll').textContent = certHasWebShareFiles() ? 'Save All' : 'Download All';
 }
 
-// ── Print All — pure HTML print, no PNG conversion → identical fidelity ──
+// ── Print All — generate a multi-page PDF with correct per-page orientation,
+//    then open it for native PDF print. Replaces window.print() because
+//    CSS named-page `@page foo { size: letter landscape }` is unreliable in
+//    Chrome — it parses the rule but renders ALL pages in the first page's
+//    orientation, so landscape certs got scaled down on portrait sheets.
+//    The PDF approach is the same one a server-side renderer would take.
 async function certsPrintAll() {
   if (!_certsState.activeFeed.length) return;
-  const root = certsEl('certsPrintRoot');
-  root.innerHTML = '';
+  const btn = certsEl('certsPrintAll');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Preparing…';
+  try {
+    await certsLoadLib('htmlToImage', 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/dist/html-to-image.min.js');
+    await certsLoadLib('jspdf',       'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js');
 
-  const ctx = {
-    player_first:  _certsState.player_first,
-    player_last:   _certsState.player_last,
-    session_label: _certsState.activeSession.name,
-    season_label:  seasonLabelFromSessionName(_certsState.activeSession.name),
-    date_str:      new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }),
-  };
+    // Use the already-rendered feed iframes (watermark + logo are loaded).
+    const feed = certsEl('certsFeedRoot');
+    const iframes = feed ? feed.querySelectorAll('iframe.cert-iframe') : [];
+    if (!iframes.length) throw new Error('Feed not ready');
 
-  const printIframes = [];
-  for (const c of _certsState.activeFeed) {
-    const html = await certBuildHtml(c, ctx);
-    const page = document.createElement('div');
-    page.className = 'cert-print-page ' + (CERT_TIER_IS_LANDSCAPE[c.tier] ? 'landscape' : 'portrait');
-    const ifr = certBuildIframe(html, CERT_TIER_IS_LANDSCAPE[c.tier]);
-    page.appendChild(ifr);
-    root.appendChild(page);
-    printIframes.push(ifr);
+    // jsPDF exposes the constructor under window.jspdf.jsPDF (UMD build).
+    const jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
+    if (!jsPDFCtor) throw new Error('jsPDF failed to load');
+
+    const firstLs = CERT_TIER_IS_LANDSCAPE[_certsState.activeFeed[0].tier];
+    const pdf = new jsPDFCtor({
+      unit: 'in',
+      format: 'letter',
+      orientation: firstLs ? 'landscape' : 'portrait',
+      compress: true,
+    });
+
+    for (let i = 0; i < iframes.length; i++) {
+      btn.textContent = 'Preparing ' + (i + 1) + ' / ' + iframes.length + '…';
+      const ifr = iframes[i];
+      const c   = _certsState.activeFeed[i];
+      const isLs = CERT_TIER_IS_LANDSCAPE[c.tier];
+      await certIframeReady(ifr);
+
+      const dataUrl = await window.htmlToImage.toPng(ifr.contentDocument.body, {
+        pixelRatio: 2,
+        cacheBust:  false,
+        backgroundColor: '#ffffff',
+        skipFonts: true,
+      });
+
+      // First page is created by the jsPDF constructor — only addPage for i >= 1.
+      if (i > 0) pdf.addPage('letter', isLs ? 'landscape' : 'portrait');
+      pdf.addImage(
+        dataUrl, 'PNG',
+        0, 0,
+        isLs ? 11 : 8.5,
+        isLs ? 8.5 : 11,
+        undefined, 'FAST'
+      );
+    }
+
+    btn.textContent = 'Opening…';
+    pdf.autoPrint();   // PDF readers auto-show the Print dialog on open
+    const url = URL.createObjectURL(pdf.output('blob'));
+    const w = window.open(url, '_blank');
+    if (!w) {
+      // Popup blocked → fall back to a direct download
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'certs.pdf';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 5000);
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    alert('Could not print: ' + (e.message || String(e)));
+    certsDbg('printAll error: ' + (e.message || e));
+  } finally {
+    btn.textContent = orig;
+    btn.disabled = false;
   }
-  // Wait for EVERY iframe to fully render (watermark + APA logo + paints)
-  // before opening the print dialog — otherwise some pages print without
-  // the background watermark.
-  await Promise.all(printIframes.map(certIframeReady));
-  window.print();
 }
 
 // ── Save All / Download All — html-to-image per cert ──
