@@ -972,12 +972,16 @@
    data — until then this is the honest view.
    ══════════════════════════════════════════════════════════════════════ */
 
-/* ── App identity ── */
-const APP_NAME    = 'PatchCheck';
-const APP_VERSION = '1.6';   // bump in lockstep with apa_core.apps row.
-                             // preprod runs at the same version as the live
-                             // DB; only bumps at promote-time. Otherwise the
-                             // auto-updater (below) would loop on "Updating".
+/* ── App identity ──
+   APP_NAME is env-aware. Preprod (served at /preprod/) polls a separate DB
+   row from prod, so version bumps in one environment don't affect tabs
+   open in the other. Convention: `<AppName>` for prod, `<AppName>-preprod`
+   for preprod. promote.sh bumps the prod DB row to match preprod's
+   APP_VERSION at promote time. */
+const APP_NAME_BASE = 'PatchCheck';
+const IS_PREPROD    = /\/preprod\//.test(location.pathname);
+const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
+const APP_VERSION   = '1.6';   // matches apa_core.apps.PatchCheck-preprod
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
