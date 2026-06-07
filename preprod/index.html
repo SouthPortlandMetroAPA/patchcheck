@@ -1025,7 +1025,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.13';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.14';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -2445,7 +2445,7 @@ async function certsPrintAll() {
       const isLs = CERT_TIER_IS_LANDSCAPE[c.tier];
       await certIframeReady(ifr);
 
-      const dataUrl = await window.htmlToImage.toPng(ifr.contentDocument.body, {
+      const dataUrl = await certHtmlToPngSafe(ifr.contentDocument.body, {
         pixelRatio: 2,
         cacheBust:  false,
         backgroundColor: '#ffffff',
@@ -2558,6 +2558,40 @@ function certIsMobileLike() {
   return false;
 }
 
+/* True iff the browser is WebKit/Safari (incl. iOS Safari, iPadOS Safari,
+   macOS Safari, and Chrome-on-iOS which uses WebKit under the hood).
+   We need this to gate the html-to-image double-snapshot workaround. */
+function certIsWebKit() {
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod|CriOS|FxiOS/i.test(ua)) return true;
+  // iPadOS 13+ identifies as Macintosh; distinguish via touch points.
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) return true;
+  // macOS Safari (but NOT Chrome/Edge/Firefox).
+  if (/Safari/i.test(ua) && !/Chrome|Chromium|Edg|OPR|Firefox/i.test(ua)) return true;
+  return false;
+}
+
+/* html-to-image foreignObject + WebKit bug: the first toPng/toBlob call on
+   a node containing background-image data URIs paints the background as
+   transparent because Safari's SVG image-decoder cache isn't populated yet
+   when the canvas draw happens. The maintainer-blessed workaround
+   (html-to-image #361 / #486 / many SO threads as of 2026) is to call the
+   conversion TWICE and use the second result — the first pass populates
+   the SVG decoder cache; the second pass paints with the cached bitmap.
+   Pure overhead on Chrome/Edge, so we gate it on WebKit. */
+async function certHtmlToBlobSafe(node, opts) {
+  if (certIsWebKit()) {
+    try { await window.htmlToImage.toBlob(node, opts); } catch (_) {}
+  }
+  return window.htmlToImage.toBlob(node, opts);
+}
+async function certHtmlToPngSafe(node, opts) {
+  if (certIsWebKit()) {
+    try { await window.htmlToImage.toPng(node, opts); } catch (_) {}
+  }
+  return window.htmlToImage.toPng(node, opts);
+}
+
 async function certsSaveAll() {
   if (!_certsState.activeFeed.length) return;
   const btn = certsEl('certsSaveAll');
@@ -2575,7 +2609,7 @@ async function certsSaveAll() {
       const ifr = iframes[i];
       const c = _certsState.activeFeed[i];
       await certIframeReady(ifr);
-      const blob = await window.htmlToImage.toBlob(ifr.contentDocument.body, {
+      const blob = await certHtmlToBlobSafe(ifr.contentDocument.body, {
         pixelRatio: 2,
         cacheBust: false,            // data URIs don't need cache-bust + saves time
         backgroundColor: '#ffffff',
