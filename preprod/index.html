@@ -250,6 +250,18 @@
         pointer-events: none;
         transition: opacity 120ms ease;
       }
+      /* Small italic chip that hovers above the dashboard while the
+         background "load all past sessions" loop is running. */
+      .prefetch-status {
+        font-size: 0.78rem;
+        color: #6b5a48;
+        font-style: italic;
+        padding: 4px 10px;
+        margin-bottom: 8px;
+        background: rgba(255,255,255,0.55);
+        border: 1px solid rgba(0,0,0,0.06);
+        border-radius: 4px;
+      }
 
       /* ── Stats Bar ── */
 
@@ -929,6 +941,10 @@
       <div id="reportInfo" style="text-align:center; font-size:0.78rem; color:var(--muted); margin: 0 0 10px; display:none;"></div>
 
       <div id="messageContainer"></div>
+      <!-- Tiny "Loading past sessions N/M…" indicator that appears while
+           the background-prefetch fans out across every other session for
+           the displayed player. Hidden until prefetch starts. -->
+      <div id="prefetchStatus" class="prefetch-status" style="display:none"></div>
 
       <!-- Dashboard -->
       <div id="dashboard">
@@ -1033,7 +1049,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.24';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.25';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -1138,6 +1154,26 @@ var _reportPrintedAt = '';   // text from sp_reports.source_printed_at
 var _llReportId = null;
 var _bdReportId = null;
 var _skReportId = null;
+
+/* ── Cross-session data cache (added 1.25) ──────────────────────────────
+   When a player loads, the system kicks off a background fetch of their
+   data for EVERY past session so flipping the session dropdown is
+   instant (no network wait). We cache two layers:
+
+   _sessionMetaCache[sessionId] = {
+       divisions, spmDivNums, isMastersDiv, teamName,
+       bdReportId, skReportId, llReportId, reportPrintedAt, sessionStart }
+
+   _playerSessionDataCache[memberShort + '|' + sessionId] = {
+       bdRows, skunks, patches, optoutTypes }
+
+   Both are populated on demand AND by the background prefetch loop that
+   fires after a successful handleSearch. Cleared when a new player is
+   loaded so we don't leak the prior player's data. */
+var _sessionMetaCache       = {};
+var _playerSessionDataCache = {};
+var _prefetchToken          = 0;   // monotonic — cancels stale prefetches
+var _lastSearchMember       = '';  // resets the cache when a NEW player is looked up
 
 /* ── UI helpers ── */
 function esc(s) {
@@ -1490,39 +1526,38 @@ async function loadSessions() {
   }
 }
 
-async function loadSessionMeta(sessionId) {
-  /* Anything that doesn't depend on the player goes here so a player
-     search is a quick lookup + one round trip for the SP rows. */
-  currentSession = sessionId;
-  var s = sessions.filter(function (x) { return String(x.id) === String(sessionId); })[0];
-  _sessionStart = s ? s.start_date : null;
+/* Fetch session metadata into a returned object, hitting the cache when
+   possible. Pure — does NOT mutate globals. Used by both loadSessionMeta
+   (which DOES swap globals) and the background prefetch loop. */
+async function fetchSessionMeta(sessionId) {
+  if (_sessionMetaCache[sessionId]) return _sessionMetaCache[sessionId];
 
-  _divisions = await sbGet('slate',
+  var divisions = await sbGet('slate',
     'divisions?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
     + '&select=id,division_number,name,format,night_of_play&order=division_number');
-  _spmDivNums = _divisions.map(function (d) { return d.division_number; });
-  _isMastersDiv = {};
-  _divisions.forEach(function (d) {
+  var spmDivNums = divisions.map(function (d) { return d.division_number; });
+  var isMastersDiv = {};
+  divisions.forEach(function (d) {
     var fmt = (d.format || '').toLowerCase();
     var nm  = (d.name   || '').toLowerCase();
-    _isMastersDiv[d.division_number] = (fmt.indexOf('master') >= 0 || nm.indexOf('master') >= 0);
+    isMastersDiv[d.division_number] = (fmt.indexOf('master') >= 0 || nm.indexOf('master') >= 0);
   });
 
-  var divIds = _divisions.map(function (d) { return d.id; });
-  _teamName = {};
+  var divIds = divisions.map(function (d) { return d.id; });
+  var teamName = {};
   if (divIds.length) {
     var teams = await sbGet('slate',
       'teams?division_id=in.(' + divIds.join(',') + ')&select=division_id,team_number,team_name');
     var divNumById = {};
-    _divisions.forEach(function (d) { divNumById[d.id] = d.division_number; });
+    divisions.forEach(function (d) { divNumById[d.id] = d.division_number; });
     teams.forEach(function (t) {
       var divNum = divNumById[t.division_id];
       if (!divNum) return;
-      _teamName[divNum + '|' + parseInt(t.team_number, 10)] = t.team_name;
+      teamName[divNum + '|' + parseInt(t.team_number, 10)] = t.team_name;
     });
   }
 
-  /* Latest cumulative ll + bd reports + the session's 8skunk report. */
+  /* Latest cumulative ll + bd reports + 8skunk report for this session. */
   var llRep = await sbGet('slate',
     'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
     + '&report_kind=eq.ll&select=id&order=uploaded_at.desc&limit=1');
@@ -1532,13 +1567,111 @@ async function loadSessionMeta(sessionId) {
   var skRep = await sbGet('slate',
     'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
     + '&report_kind=eq.8skunk&select=id&order=uploaded_at.desc&limit=1');
-  _llReportId = llRep[0] ? llRep[0].id : null;
-  _bdReportId = bdRep[0] ? bdRep[0].id : null;
-  _skReportId = skRep[0] ? skRep[0].id : null;
-  /* Prefer the operator's "data through" date; fall back to the report's
-     auto-extracted print timestamp. */
-  _reportPrintedAt = (bdRep[0] && (bdRep[0].data_through || bdRep[0].source_printed_at)) || '';
+
+  var s = sessions.filter(function (x) { return String(x.id) === String(sessionId); })[0];
+
+  var meta = {
+    sessionId: sessionId,
+    sessionStart:    s ? s.start_date : null,
+    divisions:       divisions,
+    spmDivNums:      spmDivNums,
+    isMastersDiv:    isMastersDiv,
+    teamName:        teamName,
+    llReportId:      llRep[0] ? llRep[0].id : null,
+    bdReportId:      bdRep[0] ? bdRep[0].id : null,
+    skReportId:      skRep[0] ? skRep[0].id : null,
+    reportPrintedAt: (bdRep[0] && (bdRep[0].data_through || bdRep[0].source_printed_at)) || '',
+  };
+  _sessionMetaCache[sessionId] = meta;
+  return meta;
+}
+
+/* Swap the globals to whichever session's metadata. Cheap when cached. */
+async function loadSessionMeta(sessionId) {
+  currentSession = sessionId;
+  var meta = await fetchSessionMeta(sessionId);
+  _sessionStart    = meta.sessionStart;
+  _divisions       = meta.divisions;
+  _spmDivNums      = meta.spmDivNums;
+  _isMastersDiv    = meta.isMastersDiv;
+  _teamName        = meta.teamName;
+  _llReportId      = meta.llReportId;
+  _bdReportId      = meta.bdReportId;
+  _skReportId      = meta.skReportId;
+  _reportPrintedAt = meta.reportPrintedAt;
   renderReportInfo();
+}
+
+/* Player+session data: bdRows / skunks / patches / opt-outs. Cached so
+   the second visit to a session is a no-op. */
+async function fetchPlayerSessionData(sessionId, memberShort) {
+  var key = memberShort + '|' + sessionId;
+  if (_playerSessionDataCache[key]) return _playerSessionDataCache[key];
+
+  var meta = await fetchSessionMeta(sessionId);
+  var bdRows = [];
+  if (meta.bdReportId && meta.spmDivNums.length) {
+    bdRows = await sbGet('slate',
+      'sp_by_division_rows?report_id=eq.' + meta.bdReportId
+      + '&member_number=eq.' + encodeURIComponent(memberShort)
+      + '&division_number=in.(' + meta.spmDivNums.join(',') + ')'
+      + '&select=division_number,team_number,rackless,eight_ob,eight_br,nine_os,nine_br,skunk');
+  }
+  var skunks = [];
+  if (meta.skReportId) {
+    skunks = await sbGet('slate',
+      'sp_skunk_events?report_id=eq.' + meta.skReportId
+      + '&member_number=eq.' + encodeURIComponent(memberShort)
+      + '&select=event_date,team_number,team_name');
+  }
+  var patches = await sbGet('slate',
+    'sp_patches?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
+    + '&member_number=eq.' + encodeURIComponent(memberShort)
+    + '&select=member_number,division_number,team_number,sp_type,is_slam,mailed_at');
+  var optoutRow = await sbGet('slate',
+    'patch_optouts?member_number=eq.' + encodeURIComponent(memberShort)
+    + '&select=opted_out_types');
+  var optoutTypes = (optoutRow && optoutRow[0] && optoutRow[0].opted_out_types)
+    ? new Set(optoutRow[0].opted_out_types) : new Set();
+
+  var data = { bdRows: bdRows, skunks: skunks, patches: patches, optoutTypes: optoutTypes };
+  _playerSessionDataCache[key] = data;
+  return data;
+}
+
+/* Background prefetch — fires after a successful handleSearch. Iterates
+   every session OTHER than the one the user is currently viewing and
+   loads the player's data into cache so flipping the dropdown is instant.
+   Sequential (not parallel) to avoid blasting the server, and gated by a
+   token so a new player search cancels the prior prefetch.
+   Updates a small status string the caller can subscribe to. */
+async function prefetchPlayerAllSessions(memberShort, currentSessionId) {
+  var token = ++_prefetchToken;
+  var others = sessions.filter(function (s) {
+    return parseInt(s.id, 10) !== parseInt(currentSessionId, 10);
+  });
+  if (!others.length) { renderPrefetchStatus(0, 0); return; }
+  renderPrefetchStatus(0, others.length);
+  for (var i = 0; i < others.length; i++) {
+    if (token !== _prefetchToken) return;   // new search cancelled us
+    try { await fetchPlayerSessionData(others[i].id, memberShort); }
+    catch (e) { /* a single-session fetch failure shouldn't kill the loop */ }
+    renderPrefetchStatus(i + 1, others.length);
+  }
+}
+function renderPrefetchStatus(done, total) {
+  var el = document.getElementById('prefetchStatus');
+  if (!el) return;
+  if (!total) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = 'inline-block';
+  el.textContent = (done >= total)
+    ? 'All ' + total + ' past sessions loaded'
+    : 'Loading past sessions ' + done + '/' + total + '…';
+  if (done >= total) {
+    setTimeout(function () {
+      if (el.textContent.indexOf('All') === 0) { el.style.display = 'none'; }
+    }, 2500);
+  }
 }
 
 /* Format the "Last updated" line. Two upstream shapes:
@@ -1685,34 +1818,18 @@ async function handleSearch() {
       .replace(/\s+/g, ' ').trim();
     var memberShort = String(p.member_number).slice(-5);
 
-    /* Fetch this player's SPM data. */
-    var bdRows = [];
-    if (_bdReportId && _spmDivNums.length) {
-      bdRows = await sbGet('slate',
-        'sp_by_division_rows?report_id=eq.' + _bdReportId
-        + '&member_number=eq.' + encodeURIComponent(memberShort)
-        + '&division_number=in.(' + _spmDivNums.join(',') + ')'
-        + '&select=division_number,team_number,rackless,eight_ob,eight_br,nine_os,nine_br,skunk');
+    /* If this is a brand-new player (different from whatever we had
+       loaded), drop the cache so the prior player's data can't leak
+       into this player's session-flip experience. */
+    if (_lastSearchMember !== memberShort) {
+      _playerSessionDataCache = {};
+      _lastSearchMember = memberShort;
     }
-    var skunks = [];
-    if (_skReportId) {
-      skunks = await sbGet('slate',
-        'sp_skunk_events?report_id=eq.' + _skReportId
-        + '&member_number=eq.' + encodeURIComponent(memberShort)
-        + '&select=event_date,team_number,team_name');
-    }
-    var patches = await sbGet('slate',
-      'sp_patches?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
-      + '&member_number=eq.' + encodeURIComponent(memberShort)
-      + '&select=member_number,division_number,team_number,sp_type,is_slam,mailed_at');
-    /* Opt-outs for this player so "will be mailed" doesn't get shown for
-       SP codes the player has explicitly opted out of. */
-    var optoutRow = await sbGet('slate',
-      'patch_optouts?member_number=eq.' + encodeURIComponent(memberShort)
-      + '&select=opted_out_types');
-    var optoutTypes = (optoutRow && optoutRow[0] && optoutRow[0].opted_out_types)
-      ? new Set(optoutRow[0].opted_out_types) : new Set();
-    var results = buildEvents(bdRows, skunks, patches, optoutTypes);
+
+    /* Fetch this player's SPM data — through the cache, so revisiting
+       a session is free. */
+    var sessData = await fetchPlayerSessionData(sessionId, memberShort);
+    var results = buildEvents(sessData.bdRows, sessData.skunks, sessData.patches, sessData.optoutTypes);
 
     /* The buttons section should show all standard labels plus any
        masters labels actually earned by the player. */
@@ -1726,6 +1843,11 @@ async function handleSearch() {
     renderDashboard({ results: results, allSPTypes: sptypes });
 
     try { sessionStorage.setItem('patchcheck_lastInput', raw); } catch (e) {}
+
+    /* Kick off background prefetch of EVERY other session's data for
+       this player so the next session-dropdown swap is instant. Fire-
+       and-forget — handleSearch's own loading state has already cleared. */
+    prefetchPlayerAllSessions(memberShort, sessionId);
   } catch (e) {
     console.error('[search] failed', e);
     showMessage('error', 'Something went wrong. Try again.');
