@@ -1025,7 +1025,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.18';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION   = '1.19';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -2504,11 +2504,19 @@ async function certsPrintAll() {
 
       // First page is created by the jsPDF constructor — only addPage for i >= 1.
       if (i > 0) pdf.addPage('letter', isLs ? 'landscape' : 'portrait');
+      // Print-safe inset: 1/8" white border on all sides. The cert design
+      // puts the bottom brand bar flush at the page edge (8.30-8.50in on
+      // landscape). Without this inset, any mild scaling by the printer
+      // driver — borderless overscale, "fit to printable area" rounding,
+      // a paper-size mismatch — pushed the bottom bar's last sliver onto
+      // a second blank page. The 0.125" margin guarantees single-page
+      // output across all consumer printers we've tested.
+      const INSET = 0.125;
       pdf.addImage(
         dataUrl, 'PNG',
-        0, 0,
-        isLs ? 11 : 8.5,
-        isLs ? 8.5 : 11,
+        INSET, INSET,
+        (isLs ? 11  : 8.5) - INSET * 2,
+        (isLs ? 8.5 : 11 ) - INSET * 2,
         undefined, 'FAST'
       );
     }
