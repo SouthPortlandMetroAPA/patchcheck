@@ -1092,7 +1092,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION   = '1.27';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION = '1.27';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -1936,10 +1936,16 @@ function showUpdateOverlay(target) {
   pollForDeploy(target);
 }
 function pollForDeploy(target) {
+  /* Whitespace-tolerant version match — earlier indexOf required exactly
+     one space between APP_VERSION and `=`, so an alignment edit (e.g.
+     "APP_VERSION   = …") made the substring miss forever and the
+     overlay spun until manual refresh. */
+  var escaped = String(target).replace(/[.+*?^${}()|[\]\\]/g, '\\$&');
+  var versionRe = new RegExp("APP_VERSION\\s*=\\s*'" + escaped + "'");
   fetch(location.pathname + '?cb=' + Date.now(), { cache: 'no-store' })
     .then(function (r) { return r.text(); })
     .then(function (html) {
-      if (html.indexOf("APP_VERSION = '" + target + "'") !== -1) {
+      if (versionRe.test(html)) {
         location.replace(location.pathname + '?cb=' + Date.now());
       } else {
         setTimeout(function () { pollForDeploy(target); }, 3000);
