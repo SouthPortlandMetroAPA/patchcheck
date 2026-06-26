@@ -1092,7 +1092,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.27';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION = '1.28';  // matches apa_core.apps.PatchCheck-preprod
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -1749,6 +1749,16 @@ function renderReportInfo() {
 
 /* ── Player search ── */
 function teamDisplay(divNum, teamNum) {
+  /* Shutout (sp_skunk_events) and slam events arrive with
+     division_number=null. APA team_numbers encode the division as
+     all digits except the last two (e.g. "1001" = div 010 team 01,
+     "17311" = div 173 team 11), so we can derive divNum when the
+     caller doesn't have it. */
+  if (!divNum) {
+    var tn = String(teamNum || '');
+    if (tn.length < 3) return null;
+    divNum = tn.slice(0, tn.length - 2).padStart(3, '0');
+  }
   return _teamName[divNum + '|' + parseInt(teamNum, 10)] || null;
 }
 function buildEvents(bdRows, skunks, patches, optoutTypes) {
@@ -1812,7 +1822,7 @@ function buildEvents(bdRows, skunks, patches, optoutTypes) {
   return events.map(function (e) {
     var label = SP_LABEL[e.sp_type] || e.sp_type;
     var team  = e.team_number ? String(parseInt(e.team_number, 10)) : '';
-    var teamName = e.division_number ? teamDisplay(e.division_number, e.team_number) : null;
+    var teamName = teamDisplay(e.division_number, e.team_number);
 
     var statusDisplay;
     if (e.sp_type === 's') {
