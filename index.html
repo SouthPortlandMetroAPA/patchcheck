@@ -36,6 +36,40 @@
       /* Hidden until maintenance check passes */
       body { visibility: hidden; }
 
+      /* ── CANONICAL "Updating…" overlay (per MEMORY.md consistency rule).
+             Identical to Apps/SpmAdminV2/site/preprod/admin.html. Do not
+             customize per-app. Driven by checkVersion() + pollForDeploy(). ── */
+      .update-overlay {
+        position: fixed; inset: 0;
+        background: rgba(10, 20, 40, 0.72);
+        display: none; align-items: center; justify-content: center;
+        z-index: 9999; padding: 24px;
+        visibility: visible;             /* survives body{visibility:hidden} */
+      }
+      .update-overlay.shown { display: flex; }
+      .update-box {
+        background: #fff; border-radius: 12px;
+        padding: 36px 32px; max-width: 420px; width: 100%;
+        text-align: center;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+      }
+      .update-spinner {
+        width: 56px; height: 56px; margin: 0 auto 18px;
+        border-radius: 50%;
+        border: 5px solid rgba(0,49,161,0.15);
+        border-top-color: var(--spm-accent);
+        animation: update-spin 0.85s linear infinite;
+      }
+      @keyframes update-spin { to { transform: rotate(360deg); } }
+      .update-title {
+        font-size: 1.3rem; font-weight: 800;
+        margin-bottom: 6px; color: var(--spm-accent);
+        letter-spacing: 0.01em;
+      }
+      .update-sub {
+        color: #444; font-size: 0.9rem; line-height: 1.5;
+      }
+
       .page {
         width: 100%;
         max-width: 600px;
@@ -208,6 +242,69 @@
       /* ── Dashboard ── */
 
       #dashboard { display: none; }
+      /* While a session swap is in flight, dim the prior session's
+         dashboard so the user sees that the numbers are stale and
+         being re-fetched (not "magically updated already"). */
+      #dashboard.session-loading {
+        opacity: 0.35;
+        pointer-events: none;
+        transition: opacity 140ms ease;
+      }
+      /* Subtle moving gradient stripe along the top of the dashboard
+         while a session swap is in flight — gives kinetic feedback even
+         when the data fetch is instant (cache hit). Respects users who
+         have requested reduced motion. */
+      #dashboard.session-shimmer {
+        position: relative;
+      }
+      #dashboard.session-shimmer::before {
+        content: '';
+        position: absolute; left: 0; right: 0; top: 0; height: 3px;
+        background: linear-gradient(90deg,
+          transparent 0%,
+          var(--color-burgundy, #8c0033) 25%,
+          var(--color-blue, #1d3aa3) 50%,
+          var(--color-burgundy, #8c0033) 75%,
+          transparent 100%);
+        background-size: 200% 100%;
+        animation: pcSessionShimmer 1100ms linear infinite;
+        z-index: 10; pointer-events: none;
+        border-radius: 4px 4px 0 0;
+      }
+      @keyframes pcSessionShimmer {
+        from { background-position: 100% 0; }
+        to   { background-position: -100% 0; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #dashboard.session-shimmer::before { animation: none; }
+      }
+      /* Inline 12px spinner that can sit next to message text. */
+      .msg-spinner {
+        display: inline-block;
+        width: 12px; height: 12px;
+        margin-right: 8px;
+        vertical-align: -2px;
+        border: 2px solid rgba(140, 0, 51, 0.28);
+        border-top-color: rgba(140, 0, 51, 0.85);
+        border-radius: 50%;
+        animation: pcSpin 0.85s linear infinite;
+      }
+      @keyframes pcSpin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) {
+        .msg-spinner { animation: none; }
+      }
+      /* Small italic chip that hovers above the dashboard while the
+         background "load all past sessions" loop is running. */
+      .prefetch-status {
+        font-size: 0.78rem;
+        color: #6b5a48;
+        font-style: italic;
+        padding: 4px 10px;
+        margin-bottom: 8px;
+        background: rgba(255,255,255,0.55);
+        border: 1px solid rgba(0,0,0,0.06);
+        border-radius: 4px;
+      }
 
       /* ── Stats Bar ── */
 
@@ -849,6 +946,16 @@
   </head>
 
   <body>
+    <!-- CANONICAL update overlay (see MEMORY.md "consistency" rule). Toggled
+         by checkVersion()/pollForDeploy(). Identical to Slate's admin page. -->
+    <div id="updateOverlay" class="update-overlay">
+      <div class="update-box">
+        <div class="update-spinner" aria-hidden="true"></div>
+        <div class="update-title">Updating <span id="updateAppName">PatchCheck</span></div>
+        <div class="update-sub">A new version is being deployed. This tab will reload automatically&hellip;</div>
+      </div>
+    </div>
+
     <div class="page">
       <header>
         <h1 class="title">South Portland Metro APA</h1>
@@ -877,6 +984,10 @@
       <div id="reportInfo" style="text-align:center; font-size:0.78rem; color:var(--muted); margin: 0 0 10px; display:none;"></div>
 
       <div id="messageContainer"></div>
+      <!-- Tiny "Loading past sessions N/M…" indicator that appears while
+           the background-prefetch fans out across every other session for
+           the displayed player. Hidden until prefetch starts. -->
+      <div id="prefetchStatus" class="prefetch-status" style="display:none"></div>
 
       <!-- Dashboard -->
       <div id="dashboard">
@@ -915,6 +1026,18 @@
         </div>
 
         <div class="footer-note">Updates within 2-3 days of scoresheet review.</div>
+      </div>
+
+      <!-- ── CERTIFICATES button — appears only after a successful player lookup ── -->
+      <div id="certsCtaWrap" class="certs-cta-wrap" style="display:none;">
+        <button id="certsBtn" class="certs-cta" type="button" aria-haspopup="dialog">
+          <span class="certs-cta-icon" aria-hidden="true">🏆</span>
+          <span class="certs-cta-body">
+            <span class="certs-cta-label" id="certsCtaLabel">View My Certificates</span>
+            <span class="certs-cta-sub">Awards you've earned in past sessions</span>
+          </span>
+          <span class="certs-cta-chevron" aria-hidden="true">›</span>
+        </button>
       </div>
 
       <div class="cta-row">
@@ -960,9 +1083,23 @@
    data — until then this is the honest view.
    ══════════════════════════════════════════════════════════════════════ */
 
-/* ── App identity ── */
-const APP_NAME    = 'PatchCheck';
-const APP_VERSION = '1.5';
+/* ── App identity ──
+   APP_NAME is env-aware. Preprod (served at /preprod/) polls a separate DB
+   row from prod, so version bumps in one environment don't affect tabs
+   open in the other. Convention: `<AppName>` for prod, `<AppName>-preprod`
+   for preprod. promote.sh bumps the prod DB row to match preprod's
+   APP_VERSION at promote time. */
+const APP_NAME_BASE = 'PatchCheck';
+const IS_PREPROD    = /\/preprod\//.test(location.pathname);
+const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
+const APP_VERSION = '1.28';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+                               // 1.10 = Print All now generates a multi-page
+                               //        PDF with correct per-page orientation
+                               //        (Chrome's @page named-orientation rule
+                               //        rendered all pages portrait, scaling
+                               //        landscape certs to half-size). PDF
+                               //        opens with autoPrint → native print
+                               //        dialog → guaranteed edge-to-edge.
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -1061,6 +1198,26 @@ var _llReportId = null;
 var _bdReportId = null;
 var _skReportId = null;
 
+/* ── Cross-session data cache (added 1.25) ──────────────────────────────
+   When a player loads, the system kicks off a background fetch of their
+   data for EVERY past session so flipping the session dropdown is
+   instant (no network wait). We cache two layers:
+
+   _sessionMetaCache[sessionId] = {
+       divisions, spmDivNums, isMastersDiv, teamName,
+       bdReportId, skReportId, llReportId, reportPrintedAt, sessionStart }
+
+   _playerSessionDataCache[memberShort + '|' + sessionId] = {
+       bdRows, skunks, patches, optoutTypes }
+
+   Both are populated on demand AND by the background prefetch loop that
+   fires after a successful handleSearch. Cleared when a new player is
+   loaded so we don't leak the prior player's data. */
+var _sessionMetaCache       = {};
+var _playerSessionDataCache = {};
+var _prefetchToken          = 0;   // monotonic — cancels stale prefetches
+var _lastSearchMember       = '';  // resets the cache when a NEW player is looked up
+
 /* ── UI helpers ── */
 function esc(s) {
   var d = document.createElement('div');
@@ -1075,13 +1232,21 @@ function setLoading(on) {
   btn.disabled = on;
   btn.textContent = on ? 'SEARCHING...' : 'SEARCH';
 }
-function showMessage(type, text) {
+function showMessage(type, text, withSpinner) {
   var c = document.getElementById('messageContainer');
   c.innerHTML = '';
   if (!text) return;
   var d = document.createElement('div');
   d.className = 'msg ' + (type === 'error' ? 'msg-error' : 'msg-info');
-  d.textContent = text;
+  if (withSpinner) {
+    var s = document.createElement('span');
+    s.className = 'msg-spinner';
+    s.setAttribute('aria-hidden', 'true');
+    d.appendChild(s);
+  }
+  var t = document.createElement('span');
+  t.textContent = text;
+  d.appendChild(t);
   c.appendChild(d);
 }
 function showMemberPill(name) {
@@ -1412,39 +1577,38 @@ async function loadSessions() {
   }
 }
 
-async function loadSessionMeta(sessionId) {
-  /* Anything that doesn't depend on the player goes here so a player
-     search is a quick lookup + one round trip for the SP rows. */
-  currentSession = sessionId;
-  var s = sessions.filter(function (x) { return String(x.id) === String(sessionId); })[0];
-  _sessionStart = s ? s.start_date : null;
+/* Fetch session metadata into a returned object, hitting the cache when
+   possible. Pure — does NOT mutate globals. Used by both loadSessionMeta
+   (which DOES swap globals) and the background prefetch loop. */
+async function fetchSessionMeta(sessionId) {
+  if (_sessionMetaCache[sessionId]) return _sessionMetaCache[sessionId];
 
-  _divisions = await sbGet('slate',
+  var divisions = await sbGet('slate',
     'divisions?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
     + '&select=id,division_number,name,format,night_of_play&order=division_number');
-  _spmDivNums = _divisions.map(function (d) { return d.division_number; });
-  _isMastersDiv = {};
-  _divisions.forEach(function (d) {
+  var spmDivNums = divisions.map(function (d) { return d.division_number; });
+  var isMastersDiv = {};
+  divisions.forEach(function (d) {
     var fmt = (d.format || '').toLowerCase();
     var nm  = (d.name   || '').toLowerCase();
-    _isMastersDiv[d.division_number] = (fmt.indexOf('master') >= 0 || nm.indexOf('master') >= 0);
+    isMastersDiv[d.division_number] = (fmt.indexOf('master') >= 0 || nm.indexOf('master') >= 0);
   });
 
-  var divIds = _divisions.map(function (d) { return d.id; });
-  _teamName = {};
+  var divIds = divisions.map(function (d) { return d.id; });
+  var teamName = {};
   if (divIds.length) {
     var teams = await sbGet('slate',
       'teams?division_id=in.(' + divIds.join(',') + ')&select=division_id,team_number,team_name');
     var divNumById = {};
-    _divisions.forEach(function (d) { divNumById[d.id] = d.division_number; });
+    divisions.forEach(function (d) { divNumById[d.id] = d.division_number; });
     teams.forEach(function (t) {
       var divNum = divNumById[t.division_id];
       if (!divNum) return;
-      _teamName[divNum + '|' + parseInt(t.team_number, 10)] = t.team_name;
+      teamName[divNum + '|' + parseInt(t.team_number, 10)] = t.team_name;
     });
   }
 
-  /* Latest cumulative ll + bd reports + the session's 8skunk report. */
+  /* Latest cumulative ll + bd reports + 8skunk report for this session. */
   var llRep = await sbGet('slate',
     'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
     + '&report_kind=eq.ll&select=id&order=uploaded_at.desc&limit=1');
@@ -1454,13 +1618,111 @@ async function loadSessionMeta(sessionId) {
   var skRep = await sbGet('slate',
     'sp_reports?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
     + '&report_kind=eq.8skunk&select=id&order=uploaded_at.desc&limit=1');
-  _llReportId = llRep[0] ? llRep[0].id : null;
-  _bdReportId = bdRep[0] ? bdRep[0].id : null;
-  _skReportId = skRep[0] ? skRep[0].id : null;
-  /* Prefer the operator's "data through" date; fall back to the report's
-     auto-extracted print timestamp. */
-  _reportPrintedAt = (bdRep[0] && (bdRep[0].data_through || bdRep[0].source_printed_at)) || '';
+
+  var s = sessions.filter(function (x) { return String(x.id) === String(sessionId); })[0];
+
+  var meta = {
+    sessionId: sessionId,
+    sessionStart:    s ? s.start_date : null,
+    divisions:       divisions,
+    spmDivNums:      spmDivNums,
+    isMastersDiv:    isMastersDiv,
+    teamName:        teamName,
+    llReportId:      llRep[0] ? llRep[0].id : null,
+    bdReportId:      bdRep[0] ? bdRep[0].id : null,
+    skReportId:      skRep[0] ? skRep[0].id : null,
+    reportPrintedAt: (bdRep[0] && (bdRep[0].data_through || bdRep[0].source_printed_at)) || '',
+  };
+  _sessionMetaCache[sessionId] = meta;
+  return meta;
+}
+
+/* Swap the globals to whichever session's metadata. Cheap when cached. */
+async function loadSessionMeta(sessionId) {
+  currentSession = sessionId;
+  var meta = await fetchSessionMeta(sessionId);
+  _sessionStart    = meta.sessionStart;
+  _divisions       = meta.divisions;
+  _spmDivNums      = meta.spmDivNums;
+  _isMastersDiv    = meta.isMastersDiv;
+  _teamName        = meta.teamName;
+  _llReportId      = meta.llReportId;
+  _bdReportId      = meta.bdReportId;
+  _skReportId      = meta.skReportId;
+  _reportPrintedAt = meta.reportPrintedAt;
   renderReportInfo();
+}
+
+/* Player+session data: bdRows / skunks / patches / opt-outs. Cached so
+   the second visit to a session is a no-op. */
+async function fetchPlayerSessionData(sessionId, memberShort) {
+  var key = memberShort + '|' + sessionId;
+  if (_playerSessionDataCache[key]) return _playerSessionDataCache[key];
+
+  var meta = await fetchSessionMeta(sessionId);
+  var bdRows = [];
+  if (meta.bdReportId && meta.spmDivNums.length) {
+    bdRows = await sbGet('slate',
+      'sp_by_division_rows?report_id=eq.' + meta.bdReportId
+      + '&member_number=eq.' + encodeURIComponent(memberShort)
+      + '&division_number=in.(' + meta.spmDivNums.join(',') + ')'
+      + '&select=division_number,team_number,rackless,eight_ob,eight_br,nine_os,nine_br,skunk');
+  }
+  var skunks = [];
+  if (meta.skReportId) {
+    skunks = await sbGet('slate',
+      'sp_skunk_events?report_id=eq.' + meta.skReportId
+      + '&member_number=eq.' + encodeURIComponent(memberShort)
+      + '&select=event_date,team_number,team_name');
+  }
+  var patches = await sbGet('slate',
+    'sp_patches?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
+    + '&member_number=eq.' + encodeURIComponent(memberShort)
+    + '&select=member_number,division_number,team_number,sp_type,is_slam,mailed_at');
+  var optoutRow = await sbGet('slate',
+    'patch_optouts?member_number=eq.' + encodeURIComponent(memberShort)
+    + '&select=opted_out_types');
+  var optoutTypes = (optoutRow && optoutRow[0] && optoutRow[0].opted_out_types)
+    ? new Set(optoutRow[0].opted_out_types) : new Set();
+
+  var data = { bdRows: bdRows, skunks: skunks, patches: patches, optoutTypes: optoutTypes };
+  _playerSessionDataCache[key] = data;
+  return data;
+}
+
+/* Background prefetch — fires after a successful handleSearch. Iterates
+   every session OTHER than the one the user is currently viewing and
+   loads the player's data into cache so flipping the dropdown is instant.
+   Sequential (not parallel) to avoid blasting the server, and gated by a
+   token so a new player search cancels the prior prefetch.
+   Updates a small status string the caller can subscribe to. */
+async function prefetchPlayerAllSessions(memberShort, currentSessionId) {
+  var token = ++_prefetchToken;
+  var others = sessions.filter(function (s) {
+    return parseInt(s.id, 10) !== parseInt(currentSessionId, 10);
+  });
+  if (!others.length) { renderPrefetchStatus(0, 0); return; }
+  renderPrefetchStatus(0, others.length);
+  for (var i = 0; i < others.length; i++) {
+    if (token !== _prefetchToken) return;   // new search cancelled us
+    try { await fetchPlayerSessionData(others[i].id, memberShort); }
+    catch (e) { /* a single-session fetch failure shouldn't kill the loop */ }
+    renderPrefetchStatus(i + 1, others.length);
+  }
+}
+function renderPrefetchStatus(done, total) {
+  var el = document.getElementById('prefetchStatus');
+  if (!el) return;
+  if (!total) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = 'inline-block';
+  el.textContent = (done >= total)
+    ? 'All ' + total + ' past sessions loaded'
+    : 'Loading past sessions ' + done + '/' + total + '…';
+  if (done >= total) {
+    setTimeout(function () {
+      if (el.textContent.indexOf('All') === 0) { el.style.display = 'none'; }
+    }, 2500);
+  }
 }
 
 /* Format the "Last updated" line. Two upstream shapes:
@@ -1487,6 +1749,16 @@ function renderReportInfo() {
 
 /* ── Player search ── */
 function teamDisplay(divNum, teamNum) {
+  /* Shutout (sp_skunk_events) and slam events arrive with
+     division_number=null. APA team_numbers encode the division as
+     all digits except the last two (e.g. "1001" = div 010 team 01,
+     "17311" = div 173 team 11), so we can derive divNum when the
+     caller doesn't have it. */
+  if (!divNum) {
+    var tn = String(teamNum || '');
+    if (tn.length < 3) return null;
+    divNum = tn.slice(0, tn.length - 2).padStart(3, '0');
+  }
   return _teamName[divNum + '|' + parseInt(teamNum, 10)] || null;
 }
 function buildEvents(bdRows, skunks, patches, optoutTypes) {
@@ -1550,7 +1822,7 @@ function buildEvents(bdRows, skunks, patches, optoutTypes) {
   return events.map(function (e) {
     var label = SP_LABEL[e.sp_type] || e.sp_type;
     var team  = e.team_number ? String(parseInt(e.team_number, 10)) : '';
-    var teamName = e.division_number ? teamDisplay(e.division_number, e.team_number) : null;
+    var teamName = teamDisplay(e.division_number, e.team_number);
 
     var statusDisplay;
     if (e.sp_type === 's') {
@@ -1572,12 +1844,16 @@ function buildEvents(bdRows, skunks, patches, optoutTypes) {
   });
 }
 
-async function handleSearch() {
+async function handleSearch(opts) {
+  opts = opts || {};
   var input = document.getElementById('memberInput');
   var raw = (input.value || '').trim();
   var sessionId = parseInt(document.getElementById('sessionSelect').value, 10);
 
-  showMessage(null, '');
+  // preserveMessage: don't wipe the "Loading…" banner the session-change
+  // handler set before calling us. Without this the banner flickered off
+  // immediately so the user thought nothing was happening.
+  if (!opts.preserveMessage) showMessage(null, '');
   clearDashboard();
 
   if (!raw) {
@@ -1607,34 +1883,18 @@ async function handleSearch() {
       .replace(/\s+/g, ' ').trim();
     var memberShort = String(p.member_number).slice(-5);
 
-    /* Fetch this player's SPM data. */
-    var bdRows = [];
-    if (_bdReportId && _spmDivNums.length) {
-      bdRows = await sbGet('slate',
-        'sp_by_division_rows?report_id=eq.' + _bdReportId
-        + '&member_number=eq.' + encodeURIComponent(memberShort)
-        + '&division_number=in.(' + _spmDivNums.join(',') + ')'
-        + '&select=division_number,team_number,rackless,eight_ob,eight_br,nine_os,nine_br,skunk');
+    /* If this is a brand-new player (different from whatever we had
+       loaded), drop the cache so the prior player's data can't leak
+       into this player's session-flip experience. */
+    if (_lastSearchMember !== memberShort) {
+      _playerSessionDataCache = {};
+      _lastSearchMember = memberShort;
     }
-    var skunks = [];
-    if (_skReportId) {
-      skunks = await sbGet('slate',
-        'sp_skunk_events?report_id=eq.' + _skReportId
-        + '&member_number=eq.' + encodeURIComponent(memberShort)
-        + '&select=event_date,team_number,team_name');
-    }
-    var patches = await sbGet('slate',
-      'sp_patches?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
-      + '&member_number=eq.' + encodeURIComponent(memberShort)
-      + '&select=member_number,division_number,team_number,sp_type,is_slam,mailed_at');
-    /* Opt-outs for this player so "will be mailed" doesn't get shown for
-       SP codes the player has explicitly opted out of. */
-    var optoutRow = await sbGet('slate',
-      'patch_optouts?member_number=eq.' + encodeURIComponent(memberShort)
-      + '&select=opted_out_types');
-    var optoutTypes = (optoutRow && optoutRow[0] && optoutRow[0].opted_out_types)
-      ? new Set(optoutRow[0].opted_out_types) : new Set();
-    var results = buildEvents(bdRows, skunks, patches, optoutTypes);
+
+    /* Fetch this player's SPM data — through the cache, so revisiting
+       a session is free. */
+    var sessData = await fetchPlayerSessionData(sessionId, memberShort);
+    var results = buildEvents(sessData.bdRows, sessData.skunks, sessData.patches, sessData.optoutTypes);
 
     /* The buttons section should show all standard labels plus any
        masters labels actually earned by the player. */
@@ -1648,6 +1908,11 @@ async function handleSearch() {
     renderDashboard({ results: results, allSPTypes: sptypes });
 
     try { sessionStorage.setItem('patchcheck_lastInput', raw); } catch (e) {}
+
+    /* Kick off background prefetch of EVERY other session's data for
+       this player so the next session-dropdown swap is instant. Fire-
+       and-forget — handleSearch's own loading state has already cleared. */
+    prefetchPlayerAllSessions(memberShort, sessionId);
   } catch (e) {
     console.error('[search] failed', e);
     showMessage('error', 'Something went wrong. Try again.');
@@ -1669,24 +1934,28 @@ async function checkVersion() {
     if (remote && remote !== APP_VERSION) showUpdateOverlay(remote);
   } catch (e) {}
 }
+/* Canonical overlay (per MEMORY.md "consistency" rule). DOM is statically
+   defined in body; we only toggle the .shown class and set the app name. */
 function showUpdateOverlay(target) {
   if (_updating) return;
   _updating = true;
-  var ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(17,17,17,0.94);'
-    + 'display:flex;align-items:center;justify-content:center;'
-    + 'font-family:system-ui,-apple-system,sans-serif;color:#fff;text-align:center;padding:24px;';
-  ov.innerHTML = '<div><div style="font-size:34px;font-weight:900;font-style:italic;color:#ea002a;margin-bottom:14px;">PatchCheck</div>'
-    + '<div style="font-size:16px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:#9db4ff;">Updating…</div>'
-    + '<div style="font-size:13px;color:#aaa;margin-top:10px;">A new version is live. One moment.</div></div>';
-  document.body.appendChild(ov);
+  var name = document.getElementById('updateAppName');
+  if (name) name.textContent = APP_NAME_BASE;
+  var ov = document.getElementById('updateOverlay');
+  if (ov) ov.classList.add('shown');
   pollForDeploy(target);
 }
 function pollForDeploy(target) {
+  /* Whitespace-tolerant version match — earlier indexOf required exactly
+     one space between APP_VERSION and `=`, so an alignment edit (e.g.
+     "APP_VERSION   = …") made the substring miss forever and the
+     overlay spun until manual refresh. */
+  var escaped = String(target).replace(/[.+*?^${}()|[\]\\]/g, '\\$&');
+  var versionRe = new RegExp("APP_VERSION\\s*=\\s*'" + escaped + "'");
   fetch(location.pathname + '?cb=' + Date.now(), { cache: 'no-store' })
     .then(function (r) { return r.text(); })
     .then(function (html) {
-      if (html.indexOf("APP_VERSION = '" + target + "'") !== -1) {
+      if (versionRe.test(html)) {
         location.replace(location.pathname + '?cb=' + Date.now());
       } else {
         setTimeout(function () { pollForDeploy(target); }, 3000);
@@ -1737,17 +2006,73 @@ document.addEventListener('DOMContentLoaded', async function () {
     var v = input.value.trim();
     if (v && !document.getElementById('goButton').disabled) handleSearch();
   });
-  document.getElementById('sessionSelect').addEventListener('change', function () {
-    var id = parseInt(this.value, 10);
+  document.getElementById('sessionSelect').addEventListener('change', async function () {
+    var sel = this;
+    var id = parseInt(sel.value, 10);
     if (isNaN(id)) return;
-    if (allResults.length) {
-      /* If a player is already displayed, re-run the search against the
-         new session so the dashboard rolls over without a manual reload. */
+
+    // ── Loading-state UX (rewritten 1.26 after debugging 9907 case) ──
+    //   Old version checked `allResults.length` to decide whether to
+    //   re-run the search. 9907 has 0 SPs in Summer 2026 → length=0 →
+    //   handler skipped handleSearch entirely → user saw zero feedback
+    //   and a stale dashboard while the session-meta swap finished in
+    //   microseconds. Use _lastSearchMember (set by handleSearch on
+    //   ANY successful lookup, regardless of count) so the re-render
+    //   fires for zero-SP players too.
+    //
+    //   Even on a cache hit, hold the loading state for a minimum
+    //   ~280 ms so the user perceives the swap as an intentional
+    //   action. Per 2026 Nielsen-Norman research, transitions <100 ms
+    //   read as "instant" (no feedback) and 100–1000 ms reads as
+    //   "responsive"; we land in the responsive band.
+    var sessionName = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : 'session';
+    var dash = document.getElementById('dashboard');
+    if (dash) {
+      dash.classList.add('session-loading');
+      dash.classList.add('session-shimmer');  // subtle pulsing border
+    }
+    showMessage('info', 'Loading ' + sessionName + '…', /*spinner=*/true);
+    sel.disabled = true;
+
+    var minHoldMs   = 280;
+    var startedAt   = Date.now();
+    var hadPlayer = !!_lastSearchMember;
+
+    try {
       var saved = '';
       try { saved = sessionStorage.getItem('patchcheck_lastInput') || ''; } catch (e) {}
-      if (saved) { input.value = saved; loadSessionMeta(id).then(handleSearch); return; }
+
+      if (hadPlayer && saved) {
+        // Player is on screen → re-run search against new session.
+        // (allResults may be empty if the player had no SPs in the prior
+        //  session — that's fine, we still want the swap to render.)
+        input.value = saved;
+        await loadSessionMeta(id);
+        await handleSearch({ preserveMessage: true });
+      } else {
+        // No player shown yet → just preload session metadata.
+        await loadSessionMeta(id);
+      }
+      // Min-hold so cache-hits don't flash invisibly past the user.
+      var elapsed = Date.now() - startedAt;
+      if (elapsed < minHoldMs) {
+        await new Promise(function (r) { setTimeout(r, minHoldMs - elapsed); });
+      }
+      // Brief success confirmation (auto-clears).
+      showMessage('info', sessionName + ' loaded', /*spinner=*/false);
+      setTimeout(function () {
+        var c = document.getElementById('messageContainer');
+        if (c && c.textContent.indexOf(' loaded') >= 0) showMessage(null, '');
+      }, 1400);
+    } catch (e) {
+      showMessage('error', 'Could not load session: ' + (e.message || e));
+    } finally {
+      if (dash) {
+        dash.classList.remove('session-loading');
+        dash.classList.remove('session-shimmer');
+      }
+      sel.disabled = false;
     }
-    loadSessionMeta(id);
   });
 
   await loadSessions();
@@ -1773,6 +2098,1165 @@ document.addEventListener('DOMContentLoaded', async function () {
   checkVersion();
 });
 
+    </script>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         CERTIFICATES UI — appended block (self-contained, no edits to the
+         existing app). Adds: button, full-screen overlay with session picker
+         + cert feed, Print All (CSS @page named pages for mixed
+         portrait/landscape), Save All (Web Share API on mobile / JSZip on
+         desktop), responsive across 4 breakpoints.
+         Worker endpoint: spmapa.workers.dev/certs/{sessions,list}
+         ══════════════════════════════════════════════════════════════════════ -->
+    <style id="certs-css">
+      :root {
+        --certs-overlay-bg: #1a1410;
+        --certs-paper:      #fafaf7;
+        --certs-text:       #1a1410;
+      }
+
+      /* ── "View My Certificates" CTA — sits between dashboard and CTA row.
+         Restyled to house style (2026 CTA best practices):
+           • White card (AA-contrast red text), NOT a garish flat-gold slab
+           • Thin gold left-stripe = "premium/award" cue without low-contrast fill
+           • Trophy icon (left) + label/sub (middle) + chevron (right nav affordance)
+           • Matches the app's 12px radius + soft-shadow language; reads as the
+             primary POSITIVE action, distinct from the red/blue utility buttons. ── */
+      .certs-cta-wrap {
+        margin: 14px 0 0;
+      }
+      .certs-cta {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-left: 5px solid #c9a159;
+        border-radius: 12px;
+        padding: 13px 16px;
+        text-align: left;
+        font-family: inherit;
+        cursor: pointer;
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.10);
+        transition: transform 0.08s ease, box-shadow 0.14s ease;
+      }
+      .certs-cta:hover  { transform: translateY(-1px); box-shadow: 0 5px 16px rgba(0,0,0,0.14); }
+      .certs-cta:active { transform: translateY(0);    box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+      .certs-cta:focus-visible { outline: 3px solid rgba(0,49,161,0.35); outline-offset: 2px; }
+      .certs-cta-icon    { font-size: 1.7rem; line-height: 1; flex: 0 0 auto; }
+      .certs-cta-body    { flex: 1 1 auto; min-width: 0; }
+      .certs-cta-label   { display:block; font-size: 1rem;   font-weight: 800; color: var(--spm-primary); line-height: 1.2; }
+      .certs-cta-sub     { display:block; font-size: 0.74rem; font-weight: 500; color: var(--muted); margin-top: 2px; }
+      .certs-cta-chevron { font-size: 1.5rem; font-weight: 700; color: #c9a159; flex: 0 0 auto; line-height: 1; }
+
+      /* ── Full-screen overlay ── */
+      .certs-overlay {
+        position: fixed; inset: 0;
+        background: var(--certs-overlay-bg);
+        z-index: 9999;
+        display: none;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .certs-overlay.open { display: flex; }
+      .certs-header {
+        flex: 0 0 auto;
+        display: flex; align-items: center; gap: 12px;
+        padding: 10px 12px;
+        background: #2a1f18;
+        color: #fff;
+        border-bottom: 1px solid #4a3828;
+      }
+      .certs-back, .certs-action {
+        background: rgba(255,255,255,0.10);
+        border: 1px solid rgba(255,255,255,0.20);
+        color: #fff;
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-family: inherit;
+        font-size: 0.88rem;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .certs-back:active, .certs-action:active { background: rgba(255,255,255,0.20); }
+      .certs-action.primary {
+        background: #c9a159;
+        color: #1a1410;
+        border-color: #8a6618;
+      }
+      .certs-title {
+        flex: 1 1 auto;
+        font-size: 0.96rem;
+        font-weight: 700;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis;
+      }
+      .certs-actions-bar {
+        flex: 0 0 auto;
+        display: flex; gap: 8px;
+        padding: 8px 12px;
+        background: #1f1813;
+        border-bottom: 1px solid #4a3828;
+      }
+      .certs-actions-bar .certs-action { flex: 1 1 0; }
+
+      .certs-body {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        background: var(--certs-overlay-bg);
+        padding: 14px 12px;
+      }
+
+      /* ── Session picker (step 1) ── */
+      .certs-session-list {
+        max-width: 540px;
+        margin: 0 auto;
+        display: flex; flex-direction: column; gap: 10px;
+      }
+      .certs-session-card {
+        background: #2a1f18;
+        color: #fafaf7;
+        border: 1px solid #4a3828;
+        border-radius: 10px;
+        padding: 14px 16px;
+        font-family: inherit;
+        font-size: 1rem;
+        font-weight: 700;
+        text-align: left;
+        cursor: pointer;
+        display: flex; align-items: center; gap: 10px;
+      }
+      .certs-session-card:active { background: #3a2f28; }
+      .certs-session-card .name { flex: 1 1 auto; }
+      .certs-session-card .arrow { opacity: 0.5; font-size: 1.2rem; }
+      .certs-empty {
+        text-align: center;
+        color: #beb2a0;
+        padding: 32px 16px;
+        font-size: 0.92rem;
+      }
+
+      /* ── Cert feed (step 2) ── */
+      .certs-feed {
+        max-width: 880px;
+        margin: 0 auto;
+        display: flex; flex-direction: column; gap: 14px;
+      }
+      .cert-card {
+        background: var(--certs-paper);
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 6px 18px rgba(0,0,0,0.36);
+      }
+      /* Iframe lives at its native print size (8.5"×11" or 11"×8.5") inside
+         a CSS-scaled wrapper so the preview fits the card width while keeping
+         pixel-perfect fidelity to print. The wrapper enforces the card's
+         aspect ratio via padding-bottom (no JS measuring). */
+      .cert-iframe-wrap {
+        position: relative;
+        width: 100%;
+        overflow: hidden;
+        background: #fff;
+      }
+      .cert-iframe-wrap.portrait  { padding-bottom: 129.41%; /* 11/8.5 */ }
+      .cert-iframe-wrap.landscape { padding-bottom: 77.27%;  /*  8.5/11 */ }
+      .cert-iframe-wrap iframe.cert-iframe {
+        position: absolute; top: 0; left: 0;
+        transform-origin: top left;
+        /* native px = inches × 96. Scale on the fly via CSS calc so the
+           iframe always fills the wrapper width regardless of viewport. */
+      }
+      .cert-iframe-wrap.portrait  iframe.cert-iframe { width: 816px;  height: 1056px; }
+      .cert-iframe-wrap.landscape iframe.cert-iframe { width: 1056px; height:  816px; }
+      /* JS sets --cert-scale per wrapper after layout (wrap.clientWidth / nativeWidth). */
+      .cert-iframe-wrap iframe.cert-iframe { transform: scale(var(--cert-scale, 1)); }
+      .cert-meta {
+        padding: 8px 12px;
+        font-size: 0.78rem;
+        color: #6b5a48;
+        background: #f0eee4;
+        border-top: 1px solid #d8d2c2;
+        font-weight: 600;
+      }
+
+      /* ── Responsive breakpoints (mobile / phablet / tablet / desktop) ── */
+      /* Mobile <600 (default above) */
+      @media (min-width: 600px) {
+        /* Phablet */
+        .certs-body { padding: 18px 16px; }
+        .certs-feed { gap: 18px; }
+      }
+      @media (min-width: 820px) {
+        /* Tablet */
+        .certs-header { padding: 12px 20px; }
+        .certs-actions-bar { padding: 10px 20px; }
+        .certs-body { padding: 24px 20px; }
+        .certs-title { font-size: 1.05rem; }
+      }
+      @media (min-width: 1100px) {
+        /* Desktop — 2-column cert grid.
+           align-items: start prevents CSS grid's default `stretch` from
+           sizing a landscape card's height to match a taller portrait
+           card next to it (which left a blank white band below the
+           landscape iframe). */
+        .certs-feed {
+          max-width: 1280px;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 24px;
+          align-items: start;
+        }
+        .certs-actions-bar { position: sticky; top: 0; z-index: 2; }
+      }
+
+      /* ── Print layout: hidden until window.print() runs. Edge-to-edge
+             output requires (a) @page margin:0 (Chrome/Edge respect this),
+             (b) html/body margin:0 to defeat the browser's default 8px,
+             (c) the print container at native page dimensions. The user
+             must also select "Margins: None" in the print dialog —
+             browsers won't auto-pick that. ── */
+      .certs-print-root { display: none; }
+      @media print {
+        @page { margin: 0 !important; padding: 0 !important; }
+        @page cert-portrait  { size: letter portrait;  margin: 0 !important; }
+        @page cert-landscape { size: letter landscape; margin: 0 !important; }
+        html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
+        body * { visibility: hidden; }
+        .certs-print-root, .certs-print-root * { visibility: visible; }
+        .certs-print-root {
+          display: block !important;
+          position: absolute; top: 0; left: 0; right: 0;
+          margin: 0; padding: 0;
+        }
+        .cert-print-page {
+          margin: 0; padding: 0;
+          page-break-after: always;
+          break-after: page;
+          overflow: hidden;
+        }
+        .cert-print-page iframe.cert-iframe {
+          transform: none !important;
+          border: 0; margin: 0; padding: 0;
+          display: block;
+        }
+        .cert-print-page.portrait  { page: cert-portrait;  width: 8.5in; height: 11in;  }
+        .cert-print-page.landscape { page: cert-landscape; width: 11in;  height: 8.5in; }
+      }
+    </style>
+
+    <!-- Cert overlay: full-screen, two-step (session picker → cert feed) -->
+    <div id="certsOverlay" class="certs-overlay" aria-hidden="true">
+      <div class="certs-header">
+        <button id="certsClose" class="certs-back" type="button">← Back</button>
+        <div id="certsTitle" class="certs-title">Your Certificates</div>
+        <button id="certsRefresh" class="certs-back" type="button" title="Refresh">↻</button>
+      </div>
+      <div id="certsActionsBar" class="certs-actions-bar" style="display:none;">
+        <button id="certsPrintAll" class="certs-action primary" type="button">Print All</button>
+        <button id="certsSaveAll"  class="certs-action" type="button">Save All</button>
+      </div>
+      <div id="certsBody" class="certs-body"></div>
+    </div>
+
+    <!-- Hidden print container — populated just before window.print() -->
+    <div id="certsPrintRoot" class="certs-print-root" aria-hidden="true"></div>
+
+    <script>
+/* ══════════════════════════════════════════════════════════════════════
+   CERTIFICATES — client-side render (no worker, no R2)
+   ──────────────────────────────────────────────────────────────────────
+   Each player renders only their own ~handful of certs from the HTML
+   templates served alongside this app at ./cert-templates/. Data comes
+   from two Supabase RPCs (slate.player_cert_sessions, slate.player_certs)
+   that key on the resolved member_number (NOT the raw search box —
+   email lookups would otherwise break).
+
+   • CTA pre-check: silently queries player_cert_sessions on every
+     successful patch lookup. CTA is shown ONLY if total > 0 and is
+     labeled with the count ("View My 3 Certificates"). Fixes the
+     dead-end button.
+   • Open: skips the session picker when the player has certs in
+     exactly one session (UXPin progressive-disclosure rule).
+   • Feed: each cert renders LIVE in a sandboxed iframe using
+     srcdoc — same HTML the printer will see (perfect fidelity).
+   • Print All: window.print() on a hidden container of live iframes
+     (no PNG conversion → no browser drift).
+   • Save All: html-to-image converts each iframe → PNG → Web Share
+     (mobile) or ZIP (desktop). Only path with potential per-browser
+     drift; acceptable for a "save to camera roll" goal.
+   ══════════════════════════════════════════════════════════════════════ */
+
+const CERT_TPL_BASE = 'cert-templates/';   // relative to this page
+const CERT_TPL_BY_TIER = {
+  outstanding: 'spring-2026-template.html',
+  the_most:    'spring-2026-the-most-template.html',
+  exceptional: 'spring-2026-exceptional-achievement-template.html',
+};
+const CERT_TIER_LABEL = {
+  outstanding: 'Outstanding Achievement',
+  the_most:    'The Most',
+  exceptional: 'Exceptional Achievement',
+};
+const CERT_TIER_IS_LANDSCAPE = {
+  outstanding: false, the_most: true, exceptional: true,
+};
+
+// Slams (Mini-Slam / Grand Slam) are league-wide, binary achievements.
+// They're tier='exceptional' for ordering purposes but RENDER with the
+// the_most landscape layout (with a templated headline/scope so it does
+// NOT say "The Most" or print a division line).
+const CERT_SLAM_SP_TYPES = new Set(['8m', '9m', 'g']);
+function certIsSlam(c) { return CERT_SLAM_SP_TYPES.has(c.sp_type); }
+function certTemplateKey(c) { return certIsSlam(c) ? 'the_most' : c.tier; }
+function certIsLandscape(c) { return CERT_TIER_IS_LANDSCAPE[certTemplateKey(c)]; }
+
+// Cached cert summary for the active player (drives CTA visibility + opens).
+let _certsState = {
+  member_number: null,   // resolved 5-digit member key (NOT raw input)
+  player_first:  null,
+  player_last:   null,
+  sessions:      [],     // [{session_id, session_name, cert_count}]
+  totalCount:    0,
+  activeFeed:    [],     // certs currently shown in the feed
+  activeSession: null,
+};
+
+let _certTemplateCache = {};   // tier → raw HTML string
+let _certAssetCache    = { logo: null, watermark: null };
+
+// ── DOM helpers ──
+const certsEl = id => document.getElementById(id);
+const certsBody = () => certsEl('certsBody');
+function certsOpen()  { certsEl('certsOverlay').classList.add('open'); document.body.style.overflow = 'hidden'; }
+function certsClose() { certsEl('certsOverlay').classList.remove('open'); document.body.style.overflow = ''; certsEl('certsPrintRoot').innerHTML = ''; }
+function certsEmpty(msg) {
+  certsBody().innerHTML = '<div class="certs-empty">' + escapeHtml(msg) + '</div>';
+  certsEl('certsActionsBar').style.display = 'none';
+}
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ── Token substitution (mirror of the worker's substitute()) ──
+function certSubstitute(tpl, tokens) {
+  let out = tpl;
+  for (const [k, v] of Object.entries(tokens)) {
+    out = out.split('{{' + k + '}}').join(v == null ? '' : String(v));
+  }
+  return out;
+}
+
+// Cache-bust by appending the app version, so a template edit shipped in
+// vN+1 invalidates browsers that aggressively cached the vN template.
+// (Pre-1.17 used `cache: 'force-cache'` with no version key, so old
+// templates persisted forever even after the new index.html landed —
+// e.g. "The Most Grand Slam" continued to render for users whose cached
+// the_most template still had the hardcoded "The Most" prefix.)
+function certCacheBustedPath(path) {
+  return path + (path.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(APP_VERSION);
+}
+
+async function certFetchText(path) {
+  const r = await fetch(certCacheBustedPath(path), { cache: 'force-cache' });
+  if (!r.ok) throw new Error('Fetch failed: ' + path + ' → ' + r.status);
+  return r.text();
+}
+
+async function certEnsureAssets() {
+  if (!_certAssetCache.logo) {
+    _certAssetCache.logo = (await certFetchText(CERT_TPL_BASE + 'apa-logo-datauri.txt')).trim();
+  }
+  if (!_certAssetCache.watermark) {
+    _certAssetCache.watermark = (await certFetchText(CERT_TPL_BASE + 'spring-2026-watermark-datauri.txt')).trim();
+  }
+}
+
+async function certEnsureTemplate(tier) {
+  if (!_certTemplateCache[tier]) {
+    _certTemplateCache[tier] = await certFetchText(CERT_TPL_BASE + CERT_TPL_BY_TIER[tier]);
+  }
+  return _certTemplateCache[tier];
+}
+
+// ── Build the full HTML for one cert (template + tokens). Used by feed,
+//    print container, and save-as-PNG. ──
+function certCountWord(n) {
+  const w = ['Zero','One','Two','Three','Four','Five','Six','Seven',
+             'Eight','Nine','Ten','Eleven','Twelve'];
+  return (n >= 0 && n < w.length) ? w[n] : String(n);
+}
+function seasonLabelFromSessionName(name) {
+  // "Spring 2026" → "SPRING 2026" · "2026 Spring Session" → "SPRING 2026"
+  const m = String(name || '').match(/(Spring|Summer|Fall|Winter)\s+(\d{4})|(\d{4})\s+(Spring|Summer|Fall|Winter)/i);
+  if (!m) return String(name || '').toUpperCase();
+  const season = (m[1] || m[4] || '').toUpperCase();
+  const year   = (m[2] || m[3] || '');
+  return season + ' ' + year;
+}
+async function certBuildHtml(cert, ctx) {
+  await certEnsureAssets();
+  // Slams use the_most template regardless of their (exceptional) tier.
+  const tpl = await certEnsureTemplate(certTemplateKey(cert));
+  const isSlam = certIsSlam(cert);
+
+  // ── ACH_HEADLINE + ACH_SCOPE (the_most template uses these) ──
+  //   The Most cert:  "The Most 8 Ball Break & Run (3)"  + "Mount Hood 8 Ball Division"
+  //   Slam cert:      "9 Ball Mini-Slam"                 + "Across All Divisions"
+  let achHeadline = '';
+  let achScope    = '';
+  if (isSlam) {
+    achHeadline = cert.sp_label;                 // e.g. "9 Ball Mini-Slam" — no count
+    achScope    = '';                            // slam certs: no division line at all
+  } else if (cert.tier === 'the_most') {
+    achHeadline = 'The Most ' + cert.sp_label + ' (' + cert.cert_count + ')';
+    achScope    = (cert.division_name || '') + ' Division';
+  }
+
+  let html = certSubstitute(tpl, {
+    PLAYER_FIRST:        ctx.player_first || '',
+    PLAYER_LAST:         ctx.player_last  || '',
+    ACH_TYPE:            cert.sp_label,
+    ACH_QUANTITY:        isSlam ? '' : (certCountWord(cert.cert_count) + ' (' + cert.cert_count + ')'),
+    ACH_COUNT:           isSlam ? '' : String(cert.cert_count),
+    ACH_HEADLINE:        achHeadline,
+    ACH_SCOPE:           achScope,
+    TEAM_NAME:           cert.team_name     || '',
+    DIVISION_NAME:       cert.division_name || '',
+    SESSION:             ctx.session_label,
+    SEAL_SEASON:         ctx.season_label,
+    DATE:                ctx.date_str,
+    APA_LOGO_DATAURI:    _certAssetCache.logo,
+    WATERMARK_DATAURI:   _certAssetCache.watermark,
+  });
+  // The portrait Outstanding template has a literal "{{TEAM_NAME}} -
+  // {{DIVISION_NAME}} Division" line. After substituting empties, the
+  // rendered text becomes " -  Division". Strip the whole line when both
+  // team and division are empty (Outstanding aggregates across divisions
+  // for one player; Exceptional is league-wide — neither has a single
+  // owning division to print).
+  if (!cert.division_name && !cert.team_name) {
+    html = html.replace(
+      /<div class="ach-line">\s*-\s*Division<\/div>\s*/,
+      ''
+    );
+  }
+  // Slam cleanup:
+  //   • strip the now-empty .ach-division div (we set ACH_SCOPE='' for slams
+  //     so the cert has NO division line — saves ~0.3" vertical space and
+  //     visually matches the "league-wide, doesn't belong to any division"
+  //     semantics of a slam)
+  //   • on the Exceptional-template path (defensive — slams now route through
+  //     the_most), strip leading whitespace + dangling " ()" left by empty
+  //     ACH_QUANTITY / ACH_COUNT placeholders.
+  if (isSlam) {
+    html = html.replace(/<div class="ach-division">\s*<\/div>\s*/g, '');
+    html = html.replace(/<div class="ach-line">\s+/g, '<div class="ach-line">');
+    html = html.replace(/\s*\(\s*\)/g, '');
+  }
+  return html;
+}
+
+// ── Iframe factory: a cert in a sandbox sized to native print dimensions ──
+function certBuildIframe(html, isLandscape) {
+  const f = document.createElement('iframe');
+  f.className = 'cert-iframe';
+  f.setAttribute('scrolling', 'no');
+  f.setAttribute('aria-label', 'certificate');
+  f.style.cssText = 'border:0;display:block;background:#fff;'
+    + 'width:' + (isLandscape ? '11in' : '8.5in') + ';'
+    + 'height:' + (isLandscape ? '8.5in' : '11in') + ';';
+  f.srcdoc = html;
+  return f;
+}
+
+// ── Player lookup: resolve raw input → member_number via the same RPC
+//    the patch dashboard uses. Caches in _certsState. ──
+async function certsResolveMember(raw) {
+  if (!raw) return null;
+  // Use whatever session is active in the patch dashboard (any works for resolution)
+  let sessionId = parseInt(document.getElementById('sessionSelect').value, 10);
+  if (!sessionId && Array.isArray(window.sessions) && window.sessions.length) {
+    sessionId = window.sessions[0].id;
+  }
+  if (!sessionId) return null;
+  try {
+    const rows = await sbRpc('slate', 'ss_player_lookup', { p_input: raw, p_session_id: sessionId });
+    if (!rows || !rows.length) return null;
+    return { member_number: String(rows[0].member_number).slice(-5).padStart(5, '0'),
+             player_first:  rows[0].first_name || '',
+             player_last:   rows[0].last_name  || '' };
+  } catch (e) { return null; }
+}
+
+// ── Pre-check on successful lookup → CTA visibility + count ──
+async function certsPrecheck(raw) {
+  const wrap  = certsEl('certsCtaWrap');
+  const label = certsEl('certsCtaLabel');
+  wrap.style.display = 'none';   // hide until we know
+
+  const player = await certsResolveMember(raw);
+  if (!player) return;
+
+  let sessions;
+  try {
+    sessions = await sbRpc('slate', 'player_cert_sessions',
+      { p_member_number: player.member_number });
+  } catch (e) {
+    return; // service hiccup → fail closed (no dead-end button)
+  }
+  const total = (sessions || []).reduce((a, s) => a + (s.cert_count || 0), 0);
+  if (total === 0) return;
+
+  _certsState.member_number = player.member_number;
+  _certsState.player_first  = player.player_first;
+  _certsState.player_last   = player.player_last;
+  _certsState.sessions      = sessions;
+  _certsState.totalCount    = total;
+
+  label.textContent = total === 1
+    ? 'View My Certificate'
+    : 'View My ' + total + ' Certificates';
+  wrap.style.display = '';
+}
+
+// ── Open path: skip picker if only one session, else show picker ──
+function certsOpenFromCta() {
+  if (!_certsState.member_number) return;
+  certsOpen();
+  if (_certsState.sessions.length === 1) {
+    const s = _certsState.sessions[0];
+    certsLoadFeed(s.session_id, s.session_name);
+  } else {
+    certsRenderPicker();
+  }
+}
+
+function certsRenderPicker() {
+  certsEl('certsTitle').textContent = 'Your Certificates';
+  certsEl('certsActionsBar').style.display = 'none';
+  const html = '<div class="certs-session-list">' +
+    _certsState.sessions.map(s =>
+      `<button class="certs-session-card" type="button" data-id="${s.session_id}" data-name="${escapeHtml(s.session_name)}">
+         <span class="name">${escapeHtml(s.session_name)} <span style="opacity:.6;font-weight:500;font-size:.86em">(${s.cert_count})</span></span>
+         <span class="arrow">›</span>
+       </button>`).join('') +
+    '</div>';
+  certsBody().innerHTML = html;
+  certsBody().querySelectorAll('.certs-session-card').forEach(b => {
+    b.addEventListener('click', () => certsLoadFeed(parseInt(b.dataset.id, 10), b.dataset.name));
+  });
+}
+
+async function certsLoadFeed(sessionId, sessionName) {
+  _certsState.activeSession = { id: sessionId, name: sessionName };
+  certsEl('certsTitle').textContent = sessionName + ' Certificates';
+  certsBody().innerHTML = '<div class="certs-empty">Loading certificates…</div>';
+  certsEl('certsActionsBar').style.display = 'none';
+
+  let rows;
+  try {
+    rows = await sbRpc('slate', 'player_certs',
+      { p_member_number: _certsState.member_number, p_session_id: sessionId });
+  } catch (e) {
+    certsEmpty('Could not load certificates. Try again later.');
+    return;
+  }
+  if (!rows || !rows.length) {
+    certsEmpty('No certificates earned for this session.');
+    return;
+  }
+  _certsState.activeFeed = rows;
+
+  const ctx = {
+    player_first:  _certsState.player_first,
+    player_last:   _certsState.player_last,
+    session_label: sessionName,
+    season_label:  seasonLabelFromSessionName(sessionName),
+    date_str:      new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }),
+  };
+
+  // Build the feed container, then inject one iframe per cert.
+  certsBody().innerHTML = '<div class="certs-feed" id="certsFeedRoot"></div>';
+  const feed = certsEl('certsFeedRoot');
+  const wraps = [];
+  for (const c of rows) {
+    const wrap = document.createElement('div');
+    wrap.className = 'cert-card';
+    const isLs = certIsLandscape(c);
+    // No bottom meta banner — the cert design is self-explanatory.
+    wrap.innerHTML = `<div class="cert-iframe-wrap ${isLs ? 'landscape' : 'portrait'}"></div>`;
+    feed.appendChild(wrap);
+    const html = await certBuildHtml(c, ctx);
+    const iframe = certBuildIframe(html, isLs);
+    const ifwrap = wrap.querySelector('.cert-iframe-wrap');
+    ifwrap.appendChild(iframe);
+    wraps.push({ wrap: ifwrap, isLandscape: isLs });
+  }
+  // Compute exact scale per wrapper now that they're in the DOM, and on resize.
+  function rescaleAll() {
+    for (const { wrap, isLandscape } of wraps) {
+      const native = isLandscape ? 1056 : 816;
+      const w = wrap.clientWidth;
+      if (w > 0) wrap.style.setProperty('--cert-scale', String(w / native));
+    }
+  }
+  rescaleAll();
+  window.addEventListener('resize', rescaleAll, { passive: true });
+  certsEl('certsActionsBar').style.display = 'flex';
+  // Mobile gets "Save All" (Web Share); desktop gets "Download All"
+  certsEl('certsSaveAll').textContent = certHasWebShareFiles() ? 'Save All' : 'Download All';
+}
+
+// ── Print All — generate a multi-page PDF with correct per-page orientation,
+//    then open it for native PDF print. Replaces window.print() because
+//    CSS named-page `@page foo { size: letter landscape }` is unreliable in
+//    Chrome — it parses the rule but renders ALL pages in the first page's
+//    orientation, so landscape certs got scaled down on portrait sheets.
+//    The PDF approach is the same one a server-side renderer would take.
+async function certsPrintAll() {
+  if (!_certsState.activeFeed.length) return;
+  const btn = certsEl('certsPrintAll');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Preparing…';
+  // ── Pre-open a blank tab/window for the popup-blocker-prone paths ──
+  // Android Chrome 138+ (and Edge/Brave Android) reject window.open after
+  // any await chain because it loses user-gesture chaining. We open the
+  // window NOW, synchronously in the click handler, and swap its location
+  // to the PDF blob URL once the render is done. Desktop Safari/Firefox
+  // hit the same path because their print() on PDF blob iframes is
+  // unreliable (Bugzilla #1376151 / Apple 252821086). Chromium desktop
+  // uses the hidden-iframe path and doesn't need this.
+  const useWindowOpenPath = certIsMobileLike() || certIsFirefox() || certIsDesktopSafari();
+  let prePoppedWindow = null;
+  if (useWindowOpenPath) {
+    try { prePoppedWindow = window.open('about:blank', '_blank'); }
+    catch (_) { prePoppedWindow = null; }
+  }
+  try {
+    await certsLoadLib('htmlToImage', 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/dist/html-to-image.min.js');
+    await certsLoadLib('jspdf',       'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js');
+
+    // Use the already-rendered feed iframes (watermark + logo are loaded).
+    const feed = certsEl('certsFeedRoot');
+    const iframes = feed ? feed.querySelectorAll('iframe.cert-iframe') : [];
+    if (!iframes.length) throw new Error('Feed not ready');
+
+    // jsPDF exposes the constructor under window.jspdf.jsPDF (UMD build).
+    const jsPDFCtor = (window.jspdf && window.jspdf.jsPDF) || window.jsPDF;
+    if (!jsPDFCtor) throw new Error('jsPDF failed to load');
+
+    const firstLs = certIsLandscape(_certsState.activeFeed[0]);
+    const pdf = new jsPDFCtor({
+      unit: 'in',
+      format: 'letter',
+      orientation: firstLs ? 'landscape' : 'portrait',
+      compress: true,
+    });
+
+    for (let i = 0; i < iframes.length; i++) {
+      btn.textContent = 'Preparing ' + (i + 1) + ' / ' + iframes.length + '…';
+      const ifr = iframes[i];
+      const c   = _certsState.activeFeed[i];
+      const isLs = certIsLandscape(c);
+      await certIframeReady(ifr);
+
+      const dataUrl = await certHtmlToPngSafe(ifr.contentDocument.body, {
+        pixelRatio: 2,
+        cacheBust:  false,
+        backgroundColor: '#ffffff',
+        skipFonts: true,
+      });
+
+      // First page is created by the jsPDF constructor — only addPage for i >= 1.
+      if (i > 0) pdf.addPage('letter', isLs ? 'landscape' : 'portrait');
+      // Print-safe inset: 1/8" white border on all sides. The cert design
+      // puts the bottom brand bar flush at the page edge (8.30-8.50in on
+      // landscape). Without this inset, any mild scaling by the printer
+      // driver — borderless overscale, "fit to printable area" rounding,
+      // a paper-size mismatch — pushed the bottom bar's last sliver onto
+      // a second blank page. The 0.125" margin guarantees single-page
+      // output across all consumer printers we've tested.
+      const INSET = 0.125;
+      pdf.addImage(
+        dataUrl, 'PNG',
+        INSET, INSET,
+        (isLs ? 11  : 8.5) - INSET * 2,
+        (isLs ? 8.5 : 11 ) - INSET * 2,
+        undefined, 'FAST'
+      );
+    }
+
+    btn.textContent = 'Opening print dialog…';
+    // Path matrix (researched 2026):
+    //   • Chromium DESKTOP (Chrome/Edge/Brave/Opera/Vivaldi/Arc on
+    //     Win/Mac/Linux): hidden-iframe + contentWindow.print() — bypasses
+    //     "download PDFs" pref + popup blocker. WORKS reliably.
+    //   • Firefox DESKTOP (any OS): SecurityError on iframe.print() of PDF
+    //     blob (cross-origin pdf.js). Use pre-popped window + autoPrint.
+    //   • macOS Safari DESKTOP: print() on PDF iframe freezes tab.
+    //     Same window.open path; user invokes Cmd-P from Safari's viewer.
+    //   • Mobile (all): iOS Safari + Chromium-Android both render PDFs in
+    //     the OS PDF viewer best when opened as a new tab. Pre-popped
+    //     window guarantees popup blocker doesn't eat it on Android.
+    if (useWindowOpenPath) {
+      pdf.autoPrint();
+      const url = URL.createObjectURL(pdf.output('blob'));
+      if (prePoppedWindow && !prePoppedWindow.closed) {
+        try { prePoppedWindow.location = url; }
+        catch (_) {
+          // Some browsers block cross-origin nav on about:blank → fall back
+          // to opening a fresh window. May be popup-blocked at this point.
+          const w = window.open(url, '_blank');
+          if (!w) certsPrintAllFallbackDownload(url);
+        }
+      } else {
+        // Popup blocked entirely → direct download as last resort.
+        certsPrintAllFallbackDownload(url);
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } else {
+      const url = URL.createObjectURL(pdf.output('blob'));
+      const ifr = document.createElement('iframe');
+      ifr.style.cssText = 'position:fixed;right:-10000px;top:0;width:1px;height:1px;border:0;opacity:0;';
+      ifr.src = url;
+      let didPrint = false;
+      ifr.onload = () => {
+        if (didPrint) return;
+        didPrint = true;
+        // Some browsers fire load before the embedded PDF viewer is ready;
+        // give it one frame, then print.
+        setTimeout(() => {
+          try {
+            ifr.contentWindow.focus();
+            ifr.contentWindow.print();
+          } catch (e) {
+            // Cross-origin or print() blocked — fall back to opening the PDF
+            // directly so the user can print from the viewer.
+            window.open(url, '_blank');
+          }
+        }, 150);
+      };
+      document.body.appendChild(ifr);
+      // Don't yank the iframe too early — the print dialog stays attached to
+      // its window. 5 minutes is well past any reasonable print interaction.
+      setTimeout(() => {
+        try { document.body.removeChild(ifr); } catch (_) {}
+        URL.revokeObjectURL(url);
+      }, 5 * 60_000);
+    }
+  } catch (e) {
+    // Clean up the pre-popped tab so the user isn't staring at about:blank.
+    if (prePoppedWindow && !prePoppedWindow.closed) {
+      try { prePoppedWindow.close(); } catch (_) {}
+    }
+    alert('Could not print: ' + (e.message || String(e)));
+    certsDbg('printAll error: ' + (e.message || e));
+  } finally {
+    btn.textContent = orig;
+    btn.disabled = false;
+  }
+}
+
+function certsPrintAllFallbackDownload(url) {
+  const a = document.createElement('a');
+  a.href = url; a.download = 'certs.pdf';
+  a.style.display = 'none'; document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 5000);
+}
+
+// ── Save All / Download All — html-to-image per cert ──
+function certHasWebShareFiles() {
+  try {
+    const mime = certIsIOS() ? 'image/jpeg' : 'image/png';
+    const ext  = certIsIOS() ? '.jpg' : '.png';
+    return navigator.canShare && navigator.canShare({
+      files: [new File(['x'], 'x' + ext, { type: mime })],
+    });
+  } catch (e) { return false; }
+}
+
+async function certsLoadLib(globalName, url) {
+  if (window[globalName]) return;
+  await new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = url; s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
+
+/* Wait for a cert iframe to fully render its assets (watermark + APA logo
+   + any inline data URIs).
+
+   The first 2 phone-saved PNGs were missing the sakura watermark. Root
+   cause: the watermark is a CSS background-image, NOT an <img> tag, so
+   img.complete tells us NOTHING about whether it's been decoded yet. The
+   double-rAF + 250 ms tweak in 1.x masked the issue once the browser's
+   image-decode pipeline warmed up, but only flakily.
+
+   Real fix: explicitly Image.decode() the watermark data URI inside the
+   iframe BEFORE snapshotting. img.decode() resolves only after the bitmap
+   is fully decoded and ready to paint — exactly the guarantee we need. */
+async function certIframeReady(ifr) {
+  const doc = ifr.contentDocument;
+  if (!doc) return;
+  if (doc.readyState !== 'complete') {
+    await new Promise(res => ifr.addEventListener('load', res, { once: true }));
+  }
+  // All <img> tags in the cert (the APA logo at minimum)
+  const imgs = Array.from(doc.querySelectorAll('img'));
+  await Promise.all(imgs.map(img =>
+    img.complete && img.naturalWidth > 0
+      ? Promise.resolve()
+      : new Promise(res => { img.onload = res; img.onerror = res; })
+  ));
+  // Force the CSS background-image watermark to decode INSIDE this iframe.
+  // We create a temp Image in the iframe's own window so the decode happens
+  // in the same browsing context that html-to-image is about to snapshot.
+  const ifrWin = ifr.contentWindow;
+  if (ifrWin && ifrWin.Image && _certAssetCache.watermark) {
+    try {
+      const pre = new ifrWin.Image();
+      pre.src = _certAssetCache.watermark;
+      if (pre.decode) {
+        await pre.decode();
+      } else {
+        await new Promise(res => { pre.onload = res; pre.onerror = res; });
+      }
+    } catch (_) { /* decode failure is non-fatal */ }
+  }
+  // One paint cycle so the layout reflects the freshly-decoded bitmap
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+}
+
+/* Detect desktop vs mobile reliably. Web Share API on desktop opens an
+   awkward OS share dialog with mostly-empty targets; we'd rather ZIP.
+
+   HARDENED in 1.21 (per 2026 browser matrix research):
+   - Touch-alone is no longer enough — Surface Pro, ChromeOS tablet mode,
+     and macOS+Sidecar all report maxTouchPoints>1 and ontouchstart, but
+     have a real mouse/trackpad and should get the desktop ZIP flow.
+   - Require either an explicit Mobile/iPhone/iPad/iPod/Android UA token,
+     OR an iPad pretending to be Mac (Macintosh + touch + no fine pointer).
+   - matchMedia('(pointer: fine)') is the disambiguator: real touch-only
+     devices return false; Surface/Sidecar return true.   */
+function certIsMobileLike() {
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod|Android|Mobile/i.test(ua)) return true;
+  // iPadOS 13+ masquerades as Macintosh. Real iPad has no precise pointer.
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) {
+    try {
+      if (!window.matchMedia('(pointer: fine)').matches) return true;
+    } catch (_) { /* matchMedia missing → treat as mobile (safer fallback) */ return true; }
+  }
+  return false;
+}
+
+/* True iff the browser is iOS / iPadOS specifically. JPEG sharing is the
+   reliable path to Photos on these (PNG often only offers "Save to Files"
+   per WebKit limitation; Apple thread 729782). */
+function certIsIOS() {
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod|CriOS|FxiOS|EdgiOS/i.test(ua)) return true;
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) {
+    try { if (!window.matchMedia('(pointer: fine)').matches) return true; }
+    catch (_) { return true; }
+  }
+  return false;
+}
+
+/* True iff the browser is Firefox (any OS). Firefox treats inline PDF
+   blob iframes as cross-origin (resource://pdf.js) so
+   iframe.contentWindow.print() either throws SecurityError or silently
+   no-ops (Bugzilla #1376151, still open in 2026). */
+function certIsFirefox() {
+  return /Firefox|FxiOS/i.test(navigator.userAgent || '');
+}
+
+/* True iff the browser is desktop Safari (macOS, not iOS). Safari freezes
+   when you call print() on an iframe loaded with a PDF blob (Apple
+   Community 252821086, long-standing). Use window.open path instead. */
+function certIsDesktopSafari() {
+  const ua = navigator.userAgent || '';
+  if (!/Safari/i.test(ua)) return false;
+  if (/Chrome|Chromium|Edg|OPR|Firefox|CriOS|FxiOS/i.test(ua)) return false;
+  if (/iPhone|iPad|iPod/i.test(ua)) return false;
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) return false;
+  return true;
+}
+
+/* True iff the browser is WebKit/Safari (incl. iOS Safari, iPadOS Safari,
+   macOS Safari, and Chrome-on-iOS which uses WebKit under the hood).
+   We need this to gate the html-to-image double-snapshot workaround. */
+function certIsWebKit() {
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod|CriOS|FxiOS/i.test(ua)) return true;
+  // iPadOS 13+ identifies as Macintosh; distinguish via touch points.
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) return true;
+  // macOS Safari (but NOT Chrome/Edge/Firefox).
+  if (/Safari/i.test(ua) && !/Chrome|Chromium|Edg|OPR|Firefox/i.test(ua)) return true;
+  return false;
+}
+
+/* Convert a PNG blob to JPEG via canvas. iOS Save All needs this because
+   WebKit's share sheet often omits the "Save to Photos" target when the
+   shared file is PNG (only "Save to Files" appears). JPEG always exposes
+   the Photos target. Quality 0.92 keeps file size reasonable with no
+   perceptible degradation on a 2x cert at 8.5"x11". */
+async function certBlobPngToJpeg(blob, quality) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    img.src = url;
+    if (img.decode) { try { await img.decode(); } catch (_) {} }
+    else await new Promise(r => { img.onload = r; img.onerror = r; });
+    const canvas = document.createElement('canvas');
+    canvas.width  = img.naturalWidth  || 1056;
+    canvas.height = img.naturalHeight || 816;
+    const ctx = canvas.getContext('2d');
+    // White background under JPEG (no alpha) so transparent edges (rare)
+    // don't paint as black.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    return await new Promise((res, rej) => {
+      canvas.toBlob(b => b ? res(b) : rej(new Error('toBlob failed')),
+                    'image/jpeg', quality || 0.92);
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/* html-to-image foreignObject + WebKit bug: the first toPng/toBlob call on
+   a node containing background-image data URIs paints the background as
+   transparent because Safari's SVG image-decoder cache isn't populated yet
+   when the canvas draw happens. The maintainer-blessed workaround
+   (html-to-image #361 / #486 / many SO threads as of 2026) is to call the
+   conversion TWICE and use the second result — the first pass populates
+   the SVG decoder cache; the second pass paints with the cached bitmap.
+   Pure overhead on Chrome/Edge, so we gate it on WebKit. */
+async function certHtmlToBlobSafe(node, opts) {
+  if (certIsWebKit()) {
+    try { await window.htmlToImage.toBlob(node, opts); } catch (_) {}
+    // 100ms gap between calls — html-to-image #292 reports back-to-back
+    // calls on Safari sometimes BOTH return blank. Yielding the event
+    // loop lets the SVG decoder finish populating.
+    await new Promise(r => setTimeout(r, 100));
+  }
+  return window.htmlToImage.toBlob(node, opts);
+}
+async function certHtmlToPngSafe(node, opts) {
+  if (certIsWebKit()) {
+    try { await window.htmlToImage.toPng(node, opts); } catch (_) {}
+    await new Promise(r => setTimeout(r, 100));   // see toBlobSafe note
+  }
+  return window.htmlToImage.toPng(node, opts);
+}
+
+async function certsSaveAll() {
+  if (!_certsState.activeFeed.length) return;
+  const btn = certsEl('certsSaveAll');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  try {
+    await certsLoadLib('htmlToImage', 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.13/dist/html-to-image.min.js');
+    const feed = certsEl('certsFeedRoot');
+    if (!feed) throw new Error('Feed not ready');
+    const iframes = feed.querySelectorAll('iframe.cert-iframe');
+
+    // iOS share sheet only reliably shows "Save N Images to Photos" when
+    // the shared files are JPEG. PNG often gets "Save to Files" only
+    // (WebKit limitation per Apple thread 729782). Convert before share.
+    // Desktop ZIP path keeps PNG (lossless, no need to transcode).
+    const useJpeg = certIsIOS();
+    const files = [];
+    for (let i = 0; i < iframes.length; i++) {
+      btn.textContent = 'Preparing ' + (i + 1) + ' of ' + iframes.length + '…';
+      const ifr = iframes[i];
+      const c = _certsState.activeFeed[i];
+      await certIframeReady(ifr);
+      let blob = await certHtmlToBlobSafe(ifr.contentDocument.body, {
+        pixelRatio: 2,
+        cacheBust: false,            // data URIs don't need cache-bust + saves time
+        backgroundColor: '#ffffff',
+        // Some browsers fail to embed cross-origin web fonts; skip to avoid hangs.
+        skipFonts: true,
+      });
+      if (!blob) throw new Error('snapshot ' + (i + 1) + ' produced no data');
+      if (useJpeg) blob = await certBlobPngToJpeg(blob, 0.92);
+      const safe = (c.sp_type || '').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+      const div  = c.division_name ? '-' + c.division_name.replace(/[^a-z0-9]+/gi, '-').toLowerCase() : '';
+      const ext  = useJpeg ? 'jpg' : 'png';
+      const mime = useJpeg ? 'image/jpeg' : 'image/png';
+      const fname = c.tier + '-' + safe + div + '.' + ext;
+      files.push(new File([blob], fname, { type: mime }));
+    }
+
+    // Route: mobile → Web Share (Save Images to Photos). Desktop → ZIP download.
+    if (certIsMobileLike() && certHasWebShareFiles()) {
+      btn.textContent = 'Sharing…';
+      await navigator.share({
+        files,
+        title: 'My APA Certificates',
+        text: 'SPM ' + (_certsState.activeSession ? _certsState.activeSession.name : '') + ' certificates',
+      });
+    } else {
+      btn.textContent = 'Zipping…';
+      await certsLoadLib('JSZip', 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
+      const zip = new window.JSZip();
+      for (const f of files) zip.file(f.name, f);
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      const sess = _certsState.activeSession
+        ? _certsState.activeSession.name.replace(/\s+/g, '-').toLowerCase()
+        : 'session';
+      a.href = url;
+      a.download = 'certs-' + sess + '.zip';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 8000);
+    }
+  } catch (e) {
+    if (e && e.name !== 'AbortError') {
+      alert('Could not save: ' + (e.message || String(e)));
+      certsDbg('saveAll error: ' + (e.message || e));
+    }
+  } finally {
+    btn.textContent = orig;
+    btn.disabled = false;
+  }
+}
+
+/* ── Diagnostic strip (only visible when ?certdebug in URL) ────────────
+   Surfaces what step the precheck reached. Lets us iterate without
+   browser devtools. Remove once the CTA reliably appears. */
+const CERT_DEBUG = /[?&]certdebug\b/.test(location.search);
+function certsDbg(msg) {
+  if (!CERT_DEBUG) return;
+  let el = document.getElementById('certsDbgStrip');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'certsDbgStrip';
+    el.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9998;'
+      + 'background:#111;color:#9fc;padding:6px 10px;font:11px/1.3 monospace;'
+      + 'max-height:35vh;overflow:auto;border-top:2px solid #c9a159;';
+    document.body.appendChild(el);
+  }
+  const t = new Date().toISOString().slice(11, 19);
+  el.innerHTML += '<div>[' + t + '] ' + String(msg).replace(/</g,'&lt;') + '</div>';
+  el.scrollTop = el.scrollHeight;
+  try { console.log('[certs]', msg); } catch (_) {}
+}
+
+/* ── Reliable precheck trigger: MONKEY-PATCH showMemberPill ────────────
+   The MutationObserver approach can miss style-attribute mutations on
+   some Chromium builds when the change is batched with text content
+   updates. showMemberPill is called DIRECTLY by handleSearch on every
+   successful lookup, so wrapping it is bulletproof. The observer stays
+   as a belt-and-suspenders fallback. */
+;(function installShowMemberPillHook() {
+  const orig = window.showMemberPill;
+  if (typeof orig !== 'function') {
+    certsDbg('FAIL: window.showMemberPill not defined yet at script-load — observer-only fallback');
+    return;
+  }
+  window.showMemberPill = function (name) {
+    try { orig(name); }
+    catch (e) { certsDbg('orig showMemberPill threw: ' + e.message); throw e; }
+    if (name) {
+      const raw = (document.getElementById('memberInput').value || '').trim();
+      certsDbg('hook: showMemberPill("' + name + '") raw="' + raw + '"');
+      _certsState = { member_number:null, player_first:null, player_last:null,
+                      sessions:[], totalCount:0, activeFeed:[], activeSession:null };
+      const wrap = document.getElementById('certsCtaWrap');
+      if (wrap) wrap.style.display = 'none';
+      if (raw) certsPrecheckSafe(raw);
+    } else {
+      const wrap = document.getElementById('certsCtaWrap');
+      if (wrap) wrap.style.display = 'none';
+    }
+  };
+  certsDbg('showMemberPill hook installed');
+})();
+
+/* Async-safe precheck wrapper — surfaces every step to the debug strip. */
+async function certsPrecheckSafe(raw) {
+  try {
+    certsDbg('precheck: start raw="' + raw + '"');
+    const wrap  = document.getElementById('certsCtaWrap');
+    const label = document.getElementById('certsCtaLabel');
+    if (!wrap || !label) { certsDbg('precheck: FAIL — CTA elements missing'); return; }
+
+    const player = await certsResolveMember(raw);
+    certsDbg('precheck: resolveMember → ' + (player ? JSON.stringify(player) : 'null'));
+    if (!player) return;
+
+    let sessions;
+    try {
+      sessions = await sbRpc('slate', 'player_cert_sessions',
+        { p_member_number: player.member_number });
+    } catch (e) {
+      certsDbg('precheck: player_cert_sessions threw — ' + e.message);
+      return;
+    }
+    certsDbg('precheck: sessions → ' + JSON.stringify(sessions));
+
+    const total = (sessions || []).reduce((a, s) => a + (s.cert_count || 0), 0);
+    certsDbg('precheck: totalCount=' + total);
+    if (total === 0) return;
+
+    _certsState.member_number = player.member_number;
+    _certsState.player_first  = player.player_first;
+    _certsState.player_last   = player.player_last;
+    _certsState.sessions      = sessions;
+    _certsState.totalCount    = total;
+
+    label.textContent = total === 1
+      ? 'View My Certificate'
+      : 'View My ' + total + ' Certificates';
+    wrap.style.display = 'block';           // explicit (was empty string)
+    certsDbg('precheck: SHOWING CTA → "' + label.textContent + '"');
+  } catch (e) {
+    certsDbg('precheck: uncaught — ' + (e.message || e));
+  }
+}
+
+/* ── Wire up overlay handlers + a redundant observer (safety net) ── */
+document.addEventListener('DOMContentLoaded', function () {
+  certsEl('certsClose').addEventListener('click', certsClose);
+  certsEl('certsRefresh').addEventListener('click', function () {
+    const raw = (document.getElementById('memberInput').value || '').trim();
+    if (raw) certsPrecheckSafe(raw);
+  });
+  certsEl('certsPrintAll').addEventListener('click', certsPrintAll);
+  certsEl('certsSaveAll').addEventListener('click', certsSaveAll);
+  certsEl('certsBtn').addEventListener('click', certsOpenFromCta);
+
+  // Belt-and-suspenders: observer kept as fallback for any path that
+  // bypasses showMemberPill (none today, but covers future divergence).
+  const pill = document.getElementById('memberPill');
+  if (pill) {
+    const obs = new MutationObserver(() => {
+      const visible = pill.style.display !== 'none' && pill.innerHTML.trim();
+      if (visible && !_certsState.member_number) {
+        const raw = (document.getElementById('memberInput').value || '').trim();
+        certsDbg('observer fallback firing');
+        if (raw) certsPrecheckSafe(raw);
+      }
+    });
+    obs.observe(pill, { attributes:true, childList:true, subtree:true, attributeFilter:['style'] });
+  }
+  certsDbg('DOMContentLoaded handlers wired (auto-trigger via showMemberPill hook)');
+});
     </script>
   </body>
 </html>
