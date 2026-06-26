@@ -1092,7 +1092,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.28';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.29';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -1674,6 +1674,19 @@ async function fetchPlayerSessionData(sessionId, memberShort) {
       'sp_skunk_events?report_id=eq.' + meta.skReportId
       + '&member_number=eq.' + encodeURIComponent(memberShort)
       + '&select=event_date,team_number,team_name');
+    /* The 8skunk report tagged operator_id=1 is in fact APA-wide — it
+       carries shutouts from CRA divisions too. sp_skunk_events has no
+       division_number column, so server-side filtering by division
+       isn't an option. Derive the division from team_number (digits
+       minus last two, zero-padded to 3) and keep only rows whose
+       derived division is in this session's SPM division list. */
+    var spmSet = new Set(meta.spmDivNums || []);
+    skunks = skunks.filter(function (sk) {
+      var tn = String(sk.team_number || '');
+      if (tn.length < 3) return false;
+      var div = tn.slice(0, tn.length - 2).padStart(3, '0');
+      return spmSet.has(div);
+    });
   }
   var patches = await sbGet('slate',
     'sp_patches?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
