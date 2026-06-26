@@ -131,9 +131,16 @@
     }
     .player-first, .player-last {
       display: block;
-      font-size: 50pt; line-height: 0.95; font-weight: 800;
-      letter-spacing: 0.07em;
+      line-height: 0.95; font-weight: 800;
+      letter-spacing: 0.04em;
+      overflow-wrap: break-word;
     }
+    /* Player-first keeps 50pt; player-last shrinks to 44pt to fit
+       21-char real-world names like "SCHREIBER-TELESMANICH" inside the
+       8.2in container. Asymmetric on purpose — real first names are
+       always shorter than hyphenated/multi-part last names. */
+    .player-first { font-size: 50pt; }
+    .player-last  { font-size: 44pt; }
     .player-first:empty, .player-last:empty { display: none; }
 
     /* ── ACHIEVEMENT DETAILS ───────────────────────────────────────── */
@@ -141,7 +148,12 @@
       position: absolute;
       top: 5.10in;
       left: 50%; transform: translateX(-50%);
-      width: 7.0in; text-align: center; z-index: 5;
+      /* Widened from 7.0in → 7.5in so the longest team-name (25 chars,
+         "OMG! I know the Owner too") + division name (24 chars,
+         "Triple Play Masters-Vanc") fit on the {team} - {div} Division
+         line without wrapping into 3 lines that would push the
+         presenter block downward. */
+      width: 7.5in; text-align: center; z-index: 5;
       font-family: Georgia, "Times New Roman", serif; color: #2a221c;
     }
     .ach-line { font-size: 16.5pt; font-weight: 600; line-height: 1.45; }
@@ -165,7 +177,11 @@
     /* ── PRESENTER ────────────────────────────────────────────────── */
     .presenter {
       position: absolute;
-      top: 6.85in;
+      /* Moved down from 6.85in → 7.05in so an achievement block that
+         wraps to 4 lines (long team + division) still has buffer before
+         the presenter starts. Visual validation flagged ~0.08in clip at
+         the prior position. */
+      top: 7.05in;
       left: 50%; transform: translateX(-50%);
       width: 6.5in; text-align: center; z-index: 5;
       font-family: Georgia, "Times New Roman", serif;
