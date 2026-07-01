@@ -1190,7 +1190,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.30';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.31';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -3488,7 +3488,10 @@ function saveOptoutModal() {
     method = 'POST';
     headers = Object.assign({}, headers,
       { Prefer: 'resolution=merge-duplicates,return=minimal' });
-    body = JSON.stringify({ member_number: mem, opted_out_types: denied, note: '' });
+    /* Deliberately omit `note` so an admin-set note is preserved on
+       merge-duplicates. Sending note:'' would clobber it — see the
+       C29 assertion in validate-optout.mjs. */
+    body = JSON.stringify({ member_number: mem, opted_out_types: denied });
   }
 
   fetch(url, { method: method, headers: headers, body: body })
