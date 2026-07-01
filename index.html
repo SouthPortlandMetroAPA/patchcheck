@@ -1207,7 +1207,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.32';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.33';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -1962,10 +1962,18 @@ function buildEvents(bdRows, skunks, patches, optoutTypes) {
       var p = (e.sp_type === '8m' || e.sp_type === '9m' || e.sp_type === 'g')
         ? patchBySp[e.sp_type]
         : patchByDivSp[e.division_number + '|' + e.sp_type];
-      if (p && p.mailed_at)             statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at);
-      else if (p)                       statusDisplay = 'Not Yet Mailed';
-      else if (optoutTypes.has(e.sp_type)) statusDisplay = 'Opted out — not mailed';
-      else                              statusDisplay = 'Patch earned — will be mailed';
+      /* Precedence (locked in by validate-optout.mjs S1–S5):
+         1. mailed_at set                  → "Patch mailed <date>"
+         2. optout (opt-out wins over any un-mailed state — since Slate
+            3.161 always records the achievement, a naked "Not Yet
+            Mailed" would be misleading for opted-out members whose
+            patches will never actually be mailed)
+         3. patch record exists            → "Not Yet Mailed"
+         4. otherwise                      → "Patch earned — will be mailed" */
+      if (p && p.mailed_at)                  statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at);
+      else if (optoutTypes.has(e.sp_type))   statusDisplay = 'Opted out — not mailed';
+      else if (p)                            statusDisplay = 'Not Yet Mailed';
+      else                                   statusDisplay = 'Patch earned — will be mailed';
     }
 
     return { spDescription: label, week: e.week, team: team,

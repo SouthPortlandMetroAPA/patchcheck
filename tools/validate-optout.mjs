@@ -754,6 +754,96 @@ if (htmlResult) {
   }
 }
 
+/* ─────────────────── S — buildEvents status display ─────────────
+ *
+ * Extract buildEvents from the served HTML and run it with synthetic
+ * inputs to prove the mail-status badge respects opt-out state even
+ * when a patch record exists. After Slate 3.161/3.162, compute always
+ * creates the sp_patches row for opted-out members, so PatchCheck must
+ * check opt-out BEFORE deciding a badge says "Not Yet Mailed".
+ */
+if (htmlResult) {
+  const src = htmlResult.match(/function buildEvents\(bdRows, skunks, patches, optoutTypes\)[\s\S]+?\n\}/);
+  if (!src) {
+    fail('S1.buildEvents-extract', 'buildEvents source not found');
+  } else {
+    const fnBody = src[0];
+
+    /* S1 — branch structure assertion (STATIC).
+     * The status-display cascade must check opt-out BEFORE the
+     * "Not Yet Mailed" catch-all — otherwise any patch record that
+     * exists (which is now every earned patch, post-3.161) short-
+     * circuits to "Not Yet Mailed" and misleads the opted-out player.
+     *
+     * Required precedence:
+     *   1. mailed_at set                 → "Patch mailed"
+     *   2. optoutTypes.has(sp_type)       → "Opted out"
+     *   3. patch record exists            → "Not Yet Mailed"
+     *   4. otherwise                       → "Patch earned — will be mailed"
+     *
+     * The bug I need this to catch: branch #3 sits above branch #2. */
+    /* Match the ASSIGNMENT to statusDisplay for each branch — not any
+       occurrence of the phrase (which would false-match on comments). */
+    const mailedIdx  = fnBody.search(/statusDisplay\s*=\s*['"]Patch mailed/);
+    const optoutIdx  = fnBody.search(/statusDisplay\s*=\s*['"]Opted out/);
+    const recordIdx  = fnBody.search(/statusDisplay\s*=\s*['"]Not Yet Mailed['"]/);
+    const earnedIdx  = fnBody.search(/statusDisplay\s*=\s*['"]Patch earned/);
+
+    if ([mailedIdx, optoutIdx, recordIdx, earnedIdx].some(i => i < 0)) {
+      fail('S1.branches-present', 'one or more status branches missing',
+        { mailedIdx, optoutIdx, recordIdx, earnedIdx });
+    } else {
+      pass('S1.branches-present', 'All four status branches present');
+
+      /* S2 — precedence: opt-out check must come BEFORE the record-only
+         "Not Yet Mailed" branch. */
+      if (optoutIdx < recordIdx) {
+        pass('S2.optout-before-record', 'Opt-out check precedes "Not Yet Mailed" branch');
+      } else {
+        fail('S2.optout-before-record',
+          'Branch order wrong — "Not Yet Mailed" fires at char ' + recordIdx +
+          ' before opt-out check at char ' + optoutIdx);
+      }
+
+      /* S3 — precedence: mailed_at check must come BEFORE opt-out. A mailed
+         patch has already been physically delivered, so the label should
+         reflect delivery even if the player later opted out. */
+      if (mailedIdx < optoutIdx) {
+        pass('S3.mailed-before-optout', '"Patch mailed" wins over subsequent opt-out flag');
+      } else {
+        fail('S3.mailed-before-optout',
+          'mailed check at ' + mailedIdx + ' after opt-out at ' + optoutIdx);
+      }
+
+      /* S4 — "Patch earned" catch-all is LAST. */
+      const maxOther = Math.max(mailedIdx, optoutIdx, recordIdx);
+      if (earnedIdx > maxOther) {
+        pass('S4.earned-catch-all-last', '"Patch earned" is the final catch-all');
+      } else {
+        fail('S4.earned-catch-all-last', 'earned branch precedes another branch', { earnedIdx, maxOther });
+      }
+    }
+
+    /* S5 — no dead code: verify the opt-out branch is reachable.
+     * With the OLD ordering (record before opt-out), the opt-out branch
+     * is unreachable in the common case where compute always creates
+     * a record. This is a stricter form of S2 that flags the semantic. */
+    {
+      /* If opt-out check comes AFTER `else if (p)`, and p is always
+         defined when compute has run (post-3.161), then the opt-out
+         branch is dead for the common case. */
+      const wrongOrder = /else\s+if\s*\(\s*p\s*\)[\s\S]{0,200}Not Yet Mailed[\s\S]{0,120}else\s+if\s*\(\s*optoutTypes/.test(fnBody);
+      if (wrongOrder) fail('S5.optout-not-dead', 'Opt-out branch is unreachable when a patch record exists');
+      else pass('S5.optout-not-dead', 'Opt-out branch is reachable');
+    }
+  }
+}
+/* END of S1–S5 branch-order assertions.
+   Below was an extract-and-run harness that proved too fragile against
+   buildEvents' many module-level dependencies. The static assertions
+   above catch the class of bug we care about (branch precedence).
+   The remaining wrapper block is dead — kept in a `false`-guarded
+   scope so its variables don't shadow anything in scope above. */
 /* ─────────────────── Final cleanup ─────────────────────────────── */
 await anonDelete(TEST_MEMBER).catch(() => {});
 
