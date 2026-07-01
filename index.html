@@ -1207,7 +1207,14 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.33';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.34';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+/* GAS apa-mailer endpoint (action=optout_confirm_send). Fires a
+   confirmation email when a player's opt-out choices actually change on
+   save. Player-triggered mode: no admin key required, rate-limited per
+   APA# server-side, GAS resolves the email from slate.players so we can't
+   redirect to an attacker address. Failure is non-fatal — save still
+   succeeds even if the email fails. */
+const OPTOUT_CONFIRM_MAILER_URL = 'https://script.google.com/macros/s/AKfycbzGTzkBRTrIIP_tD6sbtOOUmNZkXDdtxPoO4c8fdWt5h3tZFueNSISPv8Q3LWStx73Whw/exec';
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -3439,6 +3446,9 @@ function openOptoutModal() {
     .then(function (rows) {
       var arr = (rows && rows[0] && rows[0].opted_out_types) || [];
       _optoutState.denied = new Set(arr);
+      /* Snapshot the state as-loaded so the save handler can diff and
+         only email if something actually changed. */
+      _optoutState.deniedOriginal = new Set(arr);
       renderOptoutChips();
       _setOptoutStatus('');
       document.getElementById('optoutSaveBtn').disabled = false;
@@ -3527,6 +3537,34 @@ function saveOptoutModal() {
       _setOptoutStatus('Saved!', 'ok');
       /* Bust cache: any renderer that reads patch_optouts should see the new state next fetch. */
       _playerSessionDataCache = {};
+      /* Diff vs. as-loaded snapshot. If anything changed, fire the
+         confirmation email via GAS. Non-blocking — save is complete
+         either way; email failure just gets logged silently. */
+      try {
+        var before = _optoutState.deniedOriginal || new Set();
+        var after  = _optoutState.denied         || new Set();
+        var added   = [];
+        var removed = [];
+        after.forEach(function (c)  { if (!before.has(c)) added.push(c); });
+        before.forEach(function (c) { if (!after.has(c))  removed.push(c); });
+        if (added.length || removed.length) {
+          fetch(OPTOUT_CONFIRM_MAILER_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action:        'optout_confirm_send',
+              apa_number:    _optoutState.memberShort,   // GAS accepts 5- or 8-digit
+              added_codes:   added,
+              removed_codes: removed
+            }),
+            redirect: 'follow'
+          }).catch(function (e) {
+            console.warn('[optout-confirm] fire-and-forget failed:', e && e.message);
+          });
+        }
+      } catch (e) {
+        console.warn('[optout-confirm] diff/send skipped:', e && e.message);
+      }
       setTimeout(closeOptoutModal, 900);
     })
     .catch(function (e) {

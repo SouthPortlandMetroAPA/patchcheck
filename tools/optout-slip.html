@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SPM patch opt-out slip — envelope stuffer</title>
+  <style>
+    /* Print target: US Letter 8.5"×11" portrait, three landscape slips
+       stacked vertically (each 8.5"×3.67"). Cut the sheet into thirds
+       with a paper trimmer or scissors.
+
+       Design decisions:
+       - QR 2" square (≥1.2" min for phone scan at arm's length + error-
+         correction H margin so it survives fold + envelope handling).
+       - Modular type scale ~1.35: 38pt / 15pt / 11pt / 9pt.
+       - Copy left-aligned, single column right of QR — WCAG-safe on print
+         for older bifocals.
+       - SPM brand red only for the headline accent; body stays #1a1a1a
+         for max contrast.
+       - Whitespace ~45% of the slip area — anything denser reads as spam. */
+
+    @page {
+      size: letter portrait;
+      margin: 0;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #eee;
+      font-family: Inter, 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
+      color: #1a1a1a;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    /* Screen-only frame around the sheet to make preview obvious. */
+    .sheet {
+      width: 8.5in;
+      height: 11in;
+      background: #ffffff;
+      margin: 20px auto;
+      box-shadow: 0 4px 16px rgba(0,0,0,.12);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    @media print {
+      body { background: #ffffff; }
+      .sheet { margin: 0; box-shadow: none; }
+    }
+
+    .slip {
+      flex: 1 1 0;
+      display: grid;
+      grid-template-columns: 2.7in 1fr;
+      gap: 0.35in;
+      padding: 0.35in 0.45in;
+      box-sizing: border-box;
+      position: relative;
+      /* Prevent the browser from scaling the print if it decides to
+         shrink-to-fit. Rare in modern Chromium but cheap to spell out. */
+      break-inside: avoid;
+    }
+
+    .qr-block {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6pt;
+    }
+    .qr-block img {
+      width: 2in;
+      height: 2in;
+      display: block;
+    }
+    .qr-block .url {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 8.5pt;
+      color: #333;
+      letter-spacing: -0.01em;
+      text-align: center;
+    }
+
+    .copy {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    /* 38pt headline — dominant. Line-height 0.95 keeps two short lines
+       tight so they read like a single unit. */
+    .headline {
+      font-size: 38pt;
+      font-weight: 800;
+      line-height: 0.95;
+      letter-spacing: -0.015em;
+      color: #ea002a;               /* SPM primary red */
+      margin: 0;
+    }
+
+    .subhead {
+      font-size: 15pt;
+      line-height: 1.28;
+      font-weight: 500;
+      color: #1a1a1a;
+      margin: 10pt 0 0;
+      max-width: 5in;
+    }
+
+    .cta {
+      display: flex;
+      gap: 14pt;
+      align-items: center;
+      margin-top: auto;
+      font-size: 11pt;
+      color: #1a1a1a;
+    }
+    .cta .step {
+      display: inline-flex;
+      align-items: center;
+      gap: 6pt;
+      font-weight: 500;
+    }
+    .cta .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16pt;
+      height: 16pt;
+      border-radius: 999pt;
+      background: #0031a1;          /* SPM accent blue */
+      color: #fff;
+      font-size: 9pt;
+      font-weight: 700;
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-top: 8pt;
+      font-size: 9pt;
+      color: #666;
+      letter-spacing: 0.04em;
+    }
+    .footer .brand { font-weight: 700; color: #444; text-transform: uppercase; }
+    .footer .tag   { font-style: italic; color: #999; }
+
+    /* Print hint bar (screen-only). */
+    .hint {
+      position: fixed;
+      top: 12px; left: 12px; right: 12px;
+      background: #0031a1; color: #fff;
+      padding: 10px 14px; border-radius: 8px;
+      font-family: Inter, system-ui, sans-serif; font-size: 13px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .hint button {
+      background: #fff; color: #0031a1; border: 0; padding: 6px 12px;
+      border-radius: 6px; font-weight: 700; cursor: pointer;
+    }
+    @media print { .hint { display: none; } }
+  </style>
+</head>
+<body>
+
+<div class="hint">
+  <span>3 slips per page — print at 100% scale, then cut the sheet into thirds. Preferably on cardstock or 24lb paper.</span>
+  <button onclick="window.print()">Print</button>
+</div>
+
+<div class="sheet">
+
+  <div class="slip">
+    <div class="qr-block">
+      <img src="optout-qr.svg" alt="QR code linking to PatchCheck">
+      <div class="url">southportlandmetroapa.github.io/patchcheck</div>
+    </div>
+    <div class="copy">
+      <div>
+        <h1 class="headline">Too Awesome for<br>More Patches?</h1>
+        <p class="subhead">
+          Your mailbox has feelings too. Pick which patches SPM mails you —
+          keep the flashy ones, ditch the rest, or retire from patch collection
+          entirely. No judgment.
+        </p>
+      </div>
+      <div>
+        <div class="cta">
+          <span class="step"><span class="num">1</span>Scan or visit</span>
+          <span class="step"><span class="num">2</span>Enter your APA #</span>
+          <span class="step"><span class="num">3</span>Tap the button</span>
+        </div>
+        <div class="footer">
+          <span class="brand">South Portland Metro APA</span>
+          <span class="tag">takes 60 seconds · reversible any time</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <div class="slip">
+    <div class="qr-block">
+      <img src="optout-qr.svg" alt="QR code linking to PatchCheck">
+      <div class="url">southportlandmetroapa.github.io/patchcheck</div>
+    </div>
+    <div class="copy">
+      <div>
+        <h1 class="headline">Too Awesome for<br>More Patches?</h1>
+        <p class="subhead">
+          Your mailbox has feelings too. Pick which patches SPM mails you —
+          keep the flashy ones, ditch the rest, or retire from patch collection
+          entirely. No judgment.
+        </p>
+      </div>
+      <div>
+        <div class="cta">
+          <span class="step"><span class="num">1</span>Scan or visit</span>
+          <span class="step"><span class="num">2</span>Enter your APA #</span>
+          <span class="step"><span class="num">3</span>Tap the button</span>
+        </div>
+        <div class="footer">
+          <span class="brand">South Portland Metro APA</span>
+          <span class="tag">takes 60 seconds · reversible any time</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <div class="slip">
+    <div class="qr-block">
+      <img src="optout-qr.svg" alt="QR code linking to PatchCheck">
+      <div class="url">southportlandmetroapa.github.io/patchcheck</div>
+    </div>
+    <div class="copy">
+      <div>
+        <h1 class="headline">Too Awesome for<br>More Patches?</h1>
+        <p class="subhead">
+          Your mailbox has feelings too. Pick which patches SPM mails you —
+          keep the flashy ones, ditch the rest, or retire from patch collection
+          entirely. No judgment.
+        </p>
+      </div>
+      <div>
+        <div class="cta">
+          <span class="step"><span class="num">1</span>Scan or visit</span>
+          <span class="step"><span class="num">2</span>Enter your APA #</span>
+          <span class="step"><span class="num">3</span>Tap the button</span>
+        </div>
+        <div class="footer">
+          <span class="brand">South Portland Metro APA</span>
+          <span class="tag">takes 60 seconds · reversible any time</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
