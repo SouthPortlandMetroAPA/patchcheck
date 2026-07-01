@@ -735,10 +735,86 @@
         box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
         text-decoration: none;
         color: var(--text);
+        font-family: inherit;
         font-size: 0.82rem;
         font-weight: 700;
         line-height: 1.3;
+        width: 100%;
+        cursor: pointer;
       }
+      .opt-out:hover { filter: brightness(0.98); }
+
+      /* ── Patch Opt-Out modal ── */
+      .optout-modal-backdrop {
+        display: none;
+        position: fixed; inset: 0;
+        background: rgba(20, 30, 50, 0.55);
+        z-index: 200;
+        align-items: center; justify-content: center;
+        padding: 12px;
+      }
+      .optout-modal-backdrop.shown { display: flex; }
+      .optout-modal {
+        background: var(--card);
+        border-radius: 18px;
+        max-width: 460px; width: 100%;
+        max-height: 88vh; overflow-y: auto;
+        padding: 18px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+      }
+      .optout-title { margin: 0 0 4px; font-size: 1.1rem; font-weight: 800; color: var(--text); }
+      .optout-sub   { margin: 0 0 10px; font-size: 0.78rem; color: var(--muted); }
+      .optout-bulk-row {
+        display: flex; gap: 8px; margin: 10px 0 14px;
+      }
+      .optout-bulk-btn {
+        flex: 1; padding: 10px; border-radius: 10px;
+        border: 1.5px solid var(--border); background: var(--card);
+        font-family: inherit; font-size: 0.86rem; font-weight: 700;
+        cursor: pointer;
+      }
+      .optout-bulk-btn.all-on  { color: #0a6b3a; border-color: #0a6b3a; }
+      .optout-bulk-btn.all-off { color: #b91c1c; border-color: #b91c1c; }
+      .optout-bulk-btn:hover { filter: brightness(0.98); }
+      .optout-chip-list {
+        display: flex; flex-direction: column; gap: 6px;
+        margin: 0 0 14px;
+      }
+      .optout-row {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 12px; border-radius: 10px;
+        border: 1.5px solid var(--border);
+        background: #fff; cursor: pointer;
+        font-family: inherit; font-size: 0.9rem;
+        text-align: left; width: 100%;
+      }
+      .optout-row .optout-icon {
+        font-size: 1.1rem; font-weight: 800;
+        min-width: 22px; text-align: center;
+      }
+      .optout-row.on  { border-color: #0a6b3a; }
+      .optout-row.on  .optout-icon { color: #0a6b3a; }
+      .optout-row.off { border-color: #b91c1c; background: #fff5f5; }
+      .optout-row.off .optout-icon { color: #b91c1c; }
+      .optout-actions {
+        display: flex; gap: 8px; justify-content: flex-end;
+      }
+      .optout-actions button {
+        padding: 10px 16px; border-radius: 10px;
+        border: 1.5px solid var(--border); background: var(--card);
+        font-family: inherit; font-size: 0.9rem; font-weight: 700;
+        cursor: pointer;
+      }
+      .optout-actions .primary {
+        background: var(--spm-red, #ea002a);
+        color: #fff; border-color: var(--spm-red, #ea002a);
+      }
+      .optout-status {
+        margin: 4px 0 8px; font-size: 0.78rem; color: var(--muted);
+        text-align: center; min-height: 16px;
+      }
+      .optout-status.err { color: #b91c1c; }
+      .optout-status.ok  { color: #0a6b3a; }
 
       .opt-out-sub {
         display: block;
@@ -1046,12 +1122,34 @@
           <span class="fix-it-sub">Tap here to report a missing one</span>
         </a>
 
-        <a class="opt-out" href="https://bit.ly/PatchOptOut" target="_blank">
+        <button class="opt-out" type="button" onclick="openOptoutModal()"
+                aria-haspopup="dialog" aria-controls="optoutModal">
           Too Awesome for More Patches?
           <span class="opt-out-sub">Opt out of one or more patches here</span>
-        </a>
+        </button>
       </div>
       <div class="footer-note" id="appFooter" style="margin-top:10px;"></div>
+    </div>
+
+    <!-- ── Patch Opt-Out modal ─────────────────────────────────────────── -->
+    <div class="optout-modal-backdrop" id="optoutModal"
+         role="dialog" aria-modal="true" aria-labelledby="optoutTitle">
+      <div class="optout-modal">
+        <h3 class="optout-title" id="optoutTitle">Patch preferences</h3>
+        <p class="optout-sub" id="optoutSub">
+          Tap a patch type to toggle whether you receive that patch. Green ✓ = mail it, red ✗ = skip it.
+        </p>
+        <div class="optout-bulk-row">
+          <button type="button" class="optout-bulk-btn all-on" onclick="optoutBulkSet(false)">✓ Check all</button>
+          <button type="button" class="optout-bulk-btn all-off" onclick="optoutBulkSet(true)">✗ X all</button>
+        </div>
+        <div class="optout-chip-list" id="optoutChipList"></div>
+        <div class="optout-status" id="optoutStatus"></div>
+        <div class="optout-actions">
+          <button type="button" onclick="closeOptoutModal()">Cancel</button>
+          <button type="button" class="primary" id="optoutSaveBtn" onclick="saveOptoutModal()">Save</button>
+        </div>
+      </div>
     </div>
 
     <script>
@@ -1092,7 +1190,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.29';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.30';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -1217,6 +1315,7 @@ var _sessionMetaCache       = {};
 var _playerSessionDataCache = {};
 var _prefetchToken          = 0;   // monotonic — cancels stale prefetches
 var _lastSearchMember       = '';  // resets the cache when a NEW player is looked up
+var _lastSearchName         = '';  // resolved full name — used by the opt-out modal so we can greet the player
 
 /* ── UI helpers ── */
 function esc(s) {
@@ -1903,6 +2002,7 @@ async function handleSearch(opts) {
       _playerSessionDataCache = {};
       _lastSearchMember = memberShort;
     }
+    _lastSearchName = fullName;
 
     /* Fetch this player's SPM data — through the cache, so revisiting
        a session is free. */
@@ -3269,6 +3369,153 @@ document.addEventListener('DOMContentLoaded', function () {
     obs.observe(pill, { attributes:true, childList:true, subtree:true, attributeFilter:['style'] });
   }
   certsDbg('DOMContentLoaded handlers wired (auto-trigger via showMemberPill hook)');
+});
+
+/* ══════════════════════════════════════════════════════════════════════
+   PATCH OPT-OUT MODAL
+   ──────────────────────────────────────────────────────────────────────
+   The 13 SP codes a player can opt out of mirror the Slate admin's
+   OPTOUT_CODES list. State on disk lives in slate.patch_optouts:
+     - No row for a member → they get every patch mailed
+     - Row present → opted_out_types is the ARRAY of codes they DON'T want
+   The modal edits a Set<code> and, on save:
+     - Empty set → DELETE the row (clean restore of "mail everything")
+     - Non-empty set → UPSERT the row with the new array
+   Anon writes are gated by an RLS policy (patch_optouts_anon_write) —
+   see 2026-06-30 migration. This is intentional per user choice: cheap
+   to reverse, low-stakes.
+   ══════════════════════════════════════════════════════════════════════ */
+var _OPTOUT_CODES = ['r','8','x','9','n','k','m8','mx','m9','mn','8m','9m','g'];
+var _optoutState = { memberShort: '', name: '', denied: null, loading: false };
+
+function openOptoutModal() {
+  if (!_lastSearchMember) {
+    alert('Please look yourself up first (enter your APA number or email above), then tap this button.');
+    return;
+  }
+  _optoutState.memberShort = _lastSearchMember;
+  _optoutState.name        = _lastSearchName || '';
+  _optoutState.denied      = new Set();
+  var titleEl = document.getElementById('optoutTitle');
+  var subEl   = document.getElementById('optoutSub');
+  titleEl.textContent = _optoutState.name
+    ? 'Patch preferences — ' + _optoutState.name
+    : 'Patch preferences';
+  subEl.textContent = 'Tap a patch type to toggle whether SPM mails it to you. ' +
+    'Green ✓ = mail it, red ✗ = skip it.';
+  _setOptoutStatus('Loading current preferences…');
+  document.getElementById('optoutModal').classList.add('shown');
+  document.getElementById('optoutSaveBtn').disabled = true;
+
+  /* Load current opt-outs for this member so the chips reflect reality. */
+  sbGet('slate', 'patch_optouts?member_number=eq.'
+      + encodeURIComponent(_optoutState.memberShort)
+      + '&select=opted_out_types')
+    .then(function (rows) {
+      var arr = (rows && rows[0] && rows[0].opted_out_types) || [];
+      _optoutState.denied = new Set(arr);
+      renderOptoutChips();
+      _setOptoutStatus('');
+      document.getElementById('optoutSaveBtn').disabled = false;
+    })
+    .catch(function (e) {
+      renderOptoutChips();
+      _setOptoutStatus('Could not load current preferences: ' + (e.message || e), 'err');
+      document.getElementById('optoutSaveBtn').disabled = false;
+    });
+}
+
+function closeOptoutModal() {
+  document.getElementById('optoutModal').classList.remove('shown');
+}
+
+function _setOptoutStatus(msg, level) {
+  var s = document.getElementById('optoutStatus');
+  s.textContent = msg || '';
+  s.classList.remove('err', 'ok');
+  if (level) s.classList.add(level);
+}
+
+function renderOptoutChips() {
+  var wrap = document.getElementById('optoutChipList');
+  var html = '';
+  for (var i = 0; i < _OPTOUT_CODES.length; i++) {
+    var code    = _OPTOUT_CODES[i];
+    var optedOut = _optoutState.denied.has(code);
+    var label    = SP_LABEL[code] || code;
+    html += '<button type="button" class="optout-row ' + (optedOut ? 'off' : 'on') + '"'
+         +  ' data-code="' + code + '"'
+         +  ' onclick="toggleOptoutChip(\'' + code + '\')">'
+         +    '<span class="optout-icon">' + (optedOut ? '✗' : '✓') + '</span>'
+         +    '<span>' + label + '</span>'
+         +  '</button>';
+  }
+  wrap.innerHTML = html;
+}
+
+function toggleOptoutChip(code) {
+  if (!_optoutState.denied) return;
+  if (_optoutState.denied.has(code)) _optoutState.denied.delete(code);
+  else                               _optoutState.denied.add(code);
+  renderOptoutChips();
+}
+
+function optoutBulkSet(deniedAll) {
+  if (!_optoutState.denied) return;
+  _optoutState.denied = new Set(deniedAll ? _OPTOUT_CODES : []);
+  renderOptoutChips();
+}
+
+/* Persist current state to slate.patch_optouts. Empty denied set means
+   "mail me everything" → DELETE the row so it disappears cleanly. */
+function saveOptoutModal() {
+  if (!_optoutState.memberShort || !_optoutState.denied) return;
+  var mem = _optoutState.memberShort;
+  var denied = _OPTOUT_CODES.filter(function (c) { return _optoutState.denied.has(c); });
+  var btn = document.getElementById('optoutSaveBtn');
+  btn.disabled = true;
+  _setOptoutStatus('Saving…');
+
+  var url, method, body, headers;
+  headers = sbHeaders('slate');
+  if (denied.length === 0) {
+    url = SB_URL + '/rest/v1/patch_optouts?member_number=eq.' + encodeURIComponent(mem);
+    method = 'DELETE';
+    body = null;
+  } else {
+    /* UPSERT so re-opening the modal + saving again works cleanly. */
+    url = SB_URL + '/rest/v1/patch_optouts?on_conflict=member_number';
+    method = 'POST';
+    headers = Object.assign({}, headers,
+      { Prefer: 'resolution=merge-duplicates,return=minimal' });
+    body = JSON.stringify({ member_number: mem, opted_out_types: denied, note: '' });
+  }
+
+  fetch(url, { method: method, headers: headers, body: body })
+    .then(function (r) {
+      if (!r.ok) return r.text().then(function (t) {
+        throw new Error('HTTP ' + r.status + (t ? ': ' + t.slice(0, 120) : ''));
+      });
+      _setOptoutStatus('Saved!', 'ok');
+      /* Bust cache: any renderer that reads patch_optouts should see the new state next fetch. */
+      _playerSessionDataCache = {};
+      setTimeout(closeOptoutModal, 900);
+    })
+    .catch(function (e) {
+      _setOptoutStatus('Save failed: ' + (e.message || e), 'err');
+      btn.disabled = false;
+    });
+}
+
+/* Close the modal on backdrop click + Escape. */
+document.addEventListener('click', function (e) {
+  if (e.target && e.target.id === 'optoutModal') closeOptoutModal();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' &&
+      document.getElementById('optoutModal').classList.contains('shown')) {
+    closeOptoutModal();
+  }
 });
     </script>
   </body>
