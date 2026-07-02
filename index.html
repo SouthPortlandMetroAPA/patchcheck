@@ -1207,7 +1207,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.36';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.37';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
 /* GAS apa-mailer endpoint (action=optout_confirm_send). Fires a
    confirmation email when a player's opt-out choices actually change on
    save. Player-triggered mode: no admin key required, rate-limited per
@@ -2084,7 +2084,15 @@ async function checkVersion() {
     var rows = await sbGet('apa_core',
       'apps?app_name=eq.' + APP_NAME + '&select=version');
     var remote = rows && rows[0] && rows[0].version;
-    if (remote && remote !== APP_VERSION) showUpdateOverlay(remote);
+    /* 1.37: only update when remote is NEWER. Remote older than the
+       running page = deploy window (HTML landed, DB not bumped yet) or
+       a DB rollback; showing the overlay would strand this tab
+       (2026-07-02 incident). Skip — the next 30s tick re-evaluates. */
+    if (remote && remote !== APP_VERSION) {
+      var rNum = parseFloat(remote), lNum = parseFloat(APP_VERSION);
+      if (isFinite(rNum) && isFinite(lNum) && rNum < lNum) return;
+      showUpdateOverlay(remote);
+    }
   } catch (e) {}
 }
 /* Canonical overlay (per MEMORY.md "consistency" rule). DOM is statically
@@ -2098,23 +2106,37 @@ function showUpdateOverlay(target) {
   if (ov) ov.classList.add('shown');
   pollForDeploy(target);
 }
-function pollForDeploy(target) {
-  /* Whitespace-tolerant version match — earlier indexOf required exactly
-     one space between APP_VERSION and `=`, so an alignment edit (e.g.
-     "APP_VERSION   = …") made the substring miss forever and the
-     overlay spun until manual refresh. */
-  var escaped = String(target).replace(/[.+*?^${}()|[\]\\]/g, '\\$&');
-  var versionRe = new RegExp("APP_VERSION\\s*=\\s*'" + escaped + "'");
+function pollForDeploy(target, attempt) {
+  attempt = attempt || 0;
+  /* 1.37: give-up cap. If Pages hasn't served ANY new version after
+     ~2 minutes (40 × 3s), the deploy is wedged (GitHub Pages backend
+     failure, 2026-07-02). Dismiss the overlay, reset the latch, and let
+     the 30s checkVersion cycle retry in the background — the player
+     gets the app back instead of an infinite spinner. */
+  if (attempt >= 40) {
+    console.warn('[updater] deploy not served after ~2min — dismissing overlay, retrying in background');
+    var ov = document.getElementById('updateOverlay');
+    if (ov) ov.classList.remove('shown');
+    _updating = false;
+    return;
+  }
   fetch(location.pathname + '?cb=' + Date.now(), { cache: 'no-store' })
     .then(function (r) { return r.text(); })
     .then(function (html) {
-      if (versionRe.test(html)) {
+      /* 1.37: reload when the served version differs from the RUNNING
+         one — not the pinned target. Pinning strands the tab when a
+         second bump (or DB rollback) lands mid-poll: it waits for a
+         version string the HTML will never contain (2026-07-02).
+         Whitespace-tolerant match. */
+      var m = html.match(/APP_VERSION\s*=\s*'([0-9.]+)'/);
+      var served = m ? m[1] : null;
+      if (served && served !== APP_VERSION) {
         location.replace(location.pathname + '?cb=' + Date.now());
       } else {
-        setTimeout(function () { pollForDeploy(target); }, 3000);
+        setTimeout(function () { pollForDeploy(target, attempt + 1); }, 3000);
       }
     })
-    .catch(function () { setTimeout(function () { pollForDeploy(target); }, 3000); });
+    .catch(function () { setTimeout(function () { pollForDeploy(target, attempt + 1); }, 3000); });
 }
 
 /* ── Live data refresh ── */
