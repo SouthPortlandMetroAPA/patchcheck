@@ -1207,7 +1207,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.35';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.36';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
 /* GAS apa-mailer endpoint (action=optout_confirm_send). Fires a
    confirmation email when a player's opt-out choices actually change on
    save. Player-triggered mode: no admin key required, rate-limited per
@@ -2052,6 +2052,14 @@ async function handleSearch(opts) {
     showMemberPill(memberShort + ' · ' + fullName);
     renderDashboard({ results: results, allSPTypes: sptypes });
 
+    /* Deep-link (1.36): ?optout in the URL queues the opt-out modal to
+       open after the first successful lookup. One-shot — clearing the
+       flag here means a later manual search doesn't re-open it. */
+    if (window._pendingOptoutOpen) {
+      window._pendingOptoutOpen = false;
+      setTimeout(function () { try { openOptoutModal(); } catch (e) { console.warn('[optout-link] open failed', e); } }, 350);
+    }
+
     try { sessionStorage.setItem('patchcheck_lastInput', raw); } catch (e) {}
 
     /* Kick off background prefetch of EVERY other session's data for
@@ -2232,10 +2240,22 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (reps && reps[0]) lastReportStamp = reps[0].id + '|' + reps[0].uploaded_at;
   } catch (e) {}
 
-  /* Auto-lookup the saved player on return. */
+  /* Deep-link params (1.36):
+       ?optout          — open the patch opt-out modal after the next
+                          successful lookup (auto or manual)
+       ?apa=<number>    — prefill + auto-run the lookup for that APA #
+     Combined, ?apa=12345&optout goes straight from URL → opt-out modal.
+     The plain ?optout form is what the printed slips / emails can use:
+     the player types their own number and the modal opens by itself. */
+  var qs = new URLSearchParams(location.search);
+  if (qs.has('optout')) window._pendingOptoutOpen = true;
+  var apaParam = (qs.get('apa') || '').trim();
+
+  /* Auto-lookup: URL param wins over the saved player from last visit. */
   var saved = null;
   try { saved = sessionStorage.getItem('patchcheck_lastInput'); } catch (e) {}
-  if (saved) { input.value = saved; handleSearch(); }
+  if (apaParam)   { input.value = apaParam; handleSearch(); }
+  else if (saved) { input.value = saved; handleSearch(); }
   else input.focus();
 
   setInterval(checkVersion, 30000);
