@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cert Visual Validator</title>
+<style>
+  :root { --pad: 14px; }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #f3f4f6; color: #111; }
+  header { background: #111827; color: #fff; padding: 14px 20px; position: sticky; top: 0; z-index: 100; }
+  header h1 { margin: 0; font-size: 17px; }
+  header .status { font-size: 13px; opacity: 0.9; margin-top: 4px; }
+  .summary { padding: 16px 20px; background: #fff; border-bottom: 1px solid #e5e7eb; }
+  .summary table { border-collapse: collapse; width: 100%; max-width: 1000px; }
+  .summary th, .summary td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #f3f4f6; font-size: 13px; }
+  .pass { color: #047857; font-weight: 600; }
+  .fail { color: #b91c1c; font-weight: 600; }
+  .scen { padding: 16px 20px; margin-top: 12px; background: #fff; border: 1px solid #e5e7eb; }
+  .scen h3 { margin: 0 0 6px; font-size: 14px; }
+  .scen .meta { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
+  .scen iframe {
+    width: 8.5in; height: 11in; border: 1px solid #ccc; background: #fff;
+    transform-origin: top left; transform: scale(0.4); margin-bottom: -6.5in;
+  }
+  .scen iframe.landscape { width: 11in; height: 8.5in; margin-bottom: -5in; }
+  .issues { background: #fef2f2; border-left: 3px solid #ef4444; padding: 8px 12px; margin-top: 8px; font-size: 13px; }
+  .issues ul { margin: 4px 0 0 18px; }
+  .ok-banner { background: #ecfdf5; border-left: 3px solid #10b981; padding: 8px 12px; margin-top: 8px; font-size: 13px; color: #065f46; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cert Visual Validator</h1>
+  <div class="status" id="hdrStatus">Loading templates…</div>
+</header>
+<div class="summary" id="summary"></div>
+<div id="root"></div>
+
+<script type="module">
+/* Visual / layout validation harness for the three cert templates.
+   - Loads templates (Outstanding / The Most / Exceptional) from disk
+   - Substitutes each with a battery of test scenarios (boundary names,
+     long divisions, big counts, unicode)
+   - Renders each substituted HTML in an iframe (srcdoc)
+   - Measures inside the iframe via contentDocument:
+       * Token leaks: any literal '{{' remaining in the rendered DOM
+       * Horizontal overflow: scrollWidth > clientWidth on flagged blocks
+       * Vertical overflow: scrollHeight > clientHeight on flagged blocks
+       * Element overlap: bounding-box collision between specified pairs
+       * Text-clipping: white-space:nowrap + overflow!=visible
+   - Each scenario gets PASS / FAIL + issue list. Summary table at top.
+   - window.validationResults exposed so an external harness can scrape it.
+
+   Best-practice references applied (2026):
+     * Visual regression: render → measure (instead of pixel diff which is
+       brittle to font version / antialiasing — measurement is stable)
+     * Property-based testing: invariant "no overflow, no overlap, no token
+       leak" applied to a generated input set
+     * Equivalence partitioning: short / medium / long / unicode buckets
+     * Boundary value analysis: count 1, 7, 99, 999; division names from
+       real DB ranges (Evergreen → Triple Play Masters-Vanc)
+*/
+
+const TEMPLATES = {
+  outstanding: 'cert-templates/spring-2026-template.html',
+  the_most:    'cert-templates/spring-2026-the-most-template.html',
+  exceptional: 'cert-templates/spring-2026-exceptional-achievement-template.html'
+};
+const TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+/* Test scenarios — equivalence partitions + boundaries */
+const NAMES = [
+  { id: 'short',   first: 'Joe',         last: 'Smith',  real: true },
+  { id: 'normal',  first: 'Christina',   last: 'Rodriguez', real: true },
+  /* Real DB max: 'Carol Schreiber-Telesmanich' (last_name=21 chars). */
+  { id: 'real-max',first: 'Carol',       last: 'Schreiber-Telesmanich', real: true },
+  /* Other real long names from DB */
+  { id: 'real-2',  first: 'Deanna',      last: 'Nyssen-herrington', real: true },
+  { id: 'real-3',  first: 'Pablo',       last: 'Nieves Valenzuela', real: true },
+  { id: 'unicode', first: 'José',        last: 'García-Müller', real: true },
+  { id: 'hyphen',  first: 'Mary-Ann',    last: 'O\'Donnell-McKinney', real: true },
+  /* Synthetic stretch beyond real data — diagnostic only */
+  { id: 'stretch', first: 'Maximilianus',last: 'Constantinopoulos-Wadsworth', real: false }
+];
+const DIVISIONS = [
+  { id: 'short',  name: '8 Ball', real: true },
+  { id: 'normal', name: 'Mount Hood 8 Ball', real: true },
+  /* Real DB max: 'Triple Play Masters-Vanc' (24 chars). */
+  { id: 'real-max', name: 'Triple Play Masters-Vanc', real: true },
+  /* Synthetic stretch */
+  { id: 'stretch', name: 'Salmon Creek 9 Ball Masters Extended', real: false }
+];
+const TEAMS = [
+  { id: 'short',  name: 'Cue Crew', real: true },
+  { id: 'normal', name: 'Average Joes', real: true },
+  /* Real DB max: 'OMG! I know the Owner too' (25 chars). */
+  { id: 'real-max',name: 'OMG! I know the Owner too', real: true },
+  { id: 'stretch', name: 'Pretty Little Pocket Pickers', real: false }
+];
+const COUNTS = [1, 7, 19, 99, 999];
+const ACH_TYPES = [
+  '8 Ball Break & Run',
+  '9 Ball On the Snap',
+  '8 Ball Mini-Slam',
+  'Grand Slam',
+  '8 Ball Rackless'  /* short label */
+];
+
+/* The Outstanding template's known landscape/portrait status (a few of
+   ours are landscape — only Exceptional is landscape per the template
+   names). */
+const IS_LANDSCAPE = { outstanding: false, the_most: true, exceptional: true };
+
+/* Generate scenarios. Cross every name × every division for outstanding;
+   subset of combinations to keep the run sane. */
+function buildScenarios() {
+  const out = [];
+  /* Outstanding: per-team-per-div */
+  for (const n of NAMES) {
+    for (const d of DIVISIONS) {
+      for (const t of TEAMS) {
+        for (const c of COUNTS) {
+          out.push({
+            tier: 'outstanding',
+            label: 'OUT/' + n.id + '/' + d.id + '/' + t.id + '/' + c,
+            allReal: n.real && d.real && t.real,
+            tokens: {
+              PLAYER_FIRST: n.first, PLAYER_LAST: n.last,
+              ACH_TYPE: '8 Ball Break & Run',
+              ACH_QUANTITY: numWord(c) + ' (' + c + ')',
+              TEAM_NAME: t.name, DIVISION_NAME: d.name,
+              SESSION: '2026 Spring Session', DATE: 'June 7, 2026',
+              SEAL_SEASON: 'SPRING 2026',
+              APA_LOGO_DATAURI: TINY_PNG, WATERMARK_DATAURI: TINY_PNG,
+              ACH_COUNT: String(c), ACH_HEADLINE: '', ACH_SCOPE: ''
+            }
+          });
+        }
+      }
+    }
+  }
+  /* The Most: per-division, includes the ACH_HEADLINE compound. */
+  for (const n of NAMES) {
+    for (const d of DIVISIONS) {
+      for (const c of COUNTS) {
+        for (const a of ACH_TYPES) {
+          out.push({
+            tier: 'the_most',
+            label: 'MOST/' + n.id + '/' + d.id + '/' + c + '/' + a.slice(0, 5).replace(/\s/g, ''),
+            allReal: n.real && d.real,
+            tokens: {
+              PLAYER_FIRST: n.first, PLAYER_LAST: n.last,
+              ACH_TYPE: a,
+              ACH_HEADLINE: 'The Most ' + a + ' (' + c + ')',
+              ACH_SCOPE: d.name + ' Division',
+              ACH_COUNT: String(c), COUNT: String(c), TYPE: a,
+              DIVISION_NAME: d.name, DIVISION: d.name,
+              SESSION: '2026 Spring Session', DATE: 'June 7, 2026',
+              SEAL_SEASON: 'SPRING 2026',
+              APA_LOGO_DATAURI: TINY_PNG, WATERMARK_DATAURI: TINY_PNG,
+              ACH_QUANTITY: '', TEAM_NAME: ''
+            }
+          });
+        }
+      }
+    }
+  }
+  /* Exceptional: league-wide, no division/team. */
+  for (const n of NAMES) {
+    for (const c of COUNTS) {
+      for (const a of ACH_TYPES) {
+        out.push({
+          tier: 'exceptional',
+          label: 'EXC/' + n.id + '/' + c + '/' + a.slice(0, 5).replace(/\s/g, ''),
+          allReal: n.real,
+          tokens: {
+            PLAYER_FIRST: n.first, PLAYER_LAST: n.last,
+            ACH_TYPE: a, ACH_COUNT: String(c),
+            SESSION: '2026 Spring Session', DATE: 'June 7, 2026',
+            SEAL_SEASON: 'SPRING 2026',
+            APA_LOGO_DATAURI: TINY_PNG, WATERMARK_DATAURI: TINY_PNG,
+            ACH_QUANTITY: '', ACH_HEADLINE: '', ACH_SCOPE: '',
+            DIVISION_NAME: '', DIVISION: '', TEAM_NAME: '', COUNT: String(c), TYPE: a
+          }
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function numWord(n) {
+  const w = ['Zero','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten'];
+  return w[n] || String(n);
+}
+
+function substitute(tpl, tokens) {
+  let out = tpl;
+  for (const [k, v] of Object.entries(tokens)) {
+    out = out.split('{{' + k + '}}').join(v == null ? '' : String(v));
+  }
+  return out;
+}
+
+/* Inside-iframe DOM checks. Returns list of issue strings (empty = clean). */
+function inspectFrame(doc) {
+  const issues = [];
+  /* 1. Token-leak detection. Any remaining {{ in body text. */
+  const body = doc.body;
+  if (!body) { issues.push('iframe has no body'); return issues; }
+  const hasLeftBraces = /\{\{[A-Z_]+\}\}/.test(body.innerText);
+  if (hasLeftBraces) {
+    const matches = body.innerText.match(/\{\{[A-Z_]+\}\}/g) || [];
+    issues.push('Unreplaced tokens: ' + [...new Set(matches)].join(', '));
+  }
+  /* 2. Horizontal overflow on text containers. */
+  const textBlocks = doc.querySelectorAll('.player-first, .player-last, .ach-line, .ach-headline, .ach-scope, .credit, .sig-name, .pres-primary, .pres-secondary, .name, .achievement');
+  for (const el of textBlocks) {
+    if (!el.offsetWidth) continue;
+    if (el.scrollWidth > el.clientWidth + 1) {
+      issues.push('Horizontal overflow on ' + el.className + ' (' + el.scrollWidth + ' > ' + el.clientWidth + ') text="' + el.innerText.slice(0, 40) + '"');
+    }
+  }
+  /* 3. Vertical overflow on the page itself. */
+  const html = doc.documentElement;
+  if (html.scrollHeight > html.clientHeight + 2) {
+    issues.push('Page vertical overflow (' + html.scrollHeight + ' > ' + html.clientHeight + ')');
+  }
+  /* 4. Element overlap — bounding boxes of major regions, but EXCLUDE
+     pairs that are in an ancestor / descendant relationship (a child
+     is supposed to be inside its parent). */
+  const regions = ['.player-first', '.player-last', '.achievement', '.ach-line', '.presenter', '.signatures', '.apa-logo', '.credit', '.title', '.ach-headline', '.ach-scope'];
+  const regionEls = regions.map(s => {
+    const el = doc.querySelector(s); if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return null;
+    return { name: s, el, r };
+  }).filter(Boolean);
+  for (let i = 0; i < regionEls.length; i++) {
+    for (let j = i + 1; j < regionEls.length; j++) {
+      const A = regionEls[i], B = regionEls[j];
+      /* Skip nested pairs — child living inside its parent is expected. */
+      if (A.el.contains(B.el) || B.el.contains(A.el)) continue;
+      const a = A.r, b = B.r;
+      const overlapX = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+      const overlapY = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+      const overlapArea = overlapX * overlapY;
+      if (overlapArea > 100) {
+        issues.push('Overlap: ' + A.name + ' ∩ ' + B.name + ' = ' + Math.round(overlapArea) + 'px²');
+      }
+    }
+  }
+  /* 5. nowrap + clipping check. */
+  const nowraps = doc.querySelectorAll('.sig-name, .credit');
+  for (const el of nowraps) {
+    const cs = doc.defaultView.getComputedStyle(el);
+    if (cs.whiteSpace === 'nowrap' && cs.overflow !== 'visible' && el.scrollWidth > el.clientWidth + 1) {
+      issues.push('Clipped nowrap text on ' + el.className + ': "' + el.innerText.slice(0, 40) + '"');
+    }
+  }
+  return issues;
+}
+
+async function loadTemplate(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error('Could not load ' + path + ' (' + r.status + ')');
+  return r.text();
+}
+
+async function main() {
+  const status = document.getElementById('hdrStatus');
+  status.textContent = 'Loading templates…';
+  const tpls = {};
+  for (const [k, p] of Object.entries(TEMPLATES)) {
+    tpls[k] = await loadTemplate(p);
+  }
+  status.textContent = 'Generating scenarios…';
+  const scenarios = buildScenarios();
+  status.textContent = 'Rendering & inspecting ' + scenarios.length + ' scenarios…';
+
+  const root = document.getElementById('root');
+  const results = [];
+  /* Single sandbox iframe, reused for each scenario. Visual log only
+     records FAILS to keep the DOM manageable for thousands of cases. */
+  const sandbox = document.createElement('iframe');
+  sandbox.style.cssText = 'position:fixed;left:-20000px;top:0;border:0;';
+  sandbox.setAttribute('sandbox', 'allow-same-origin');
+  document.body.appendChild(sandbox);
+  function setSandboxSize(isLs) {
+    if (isLs) { sandbox.width = 1056; sandbox.height = 816; }
+    else      { sandbox.width = 816;  sandbox.height = 1056; }
+  }
+  for (let i = 0; i < scenarios.length; i++) {
+    const s = scenarios[i];
+    const html = substitute(tpls[s.tier], s.tokens);
+    setSandboxSize(IS_LANDSCAPE[s.tier]);
+    const done = new Promise(resolve => sandbox.addEventListener('load', resolve, { once: true }));
+    sandbox.srcdoc = html;
+    await done;
+    await new Promise(r => setTimeout(r, 30));
+    let issues;
+    try { issues = inspectFrame(sandbox.contentDocument); }
+    catch (e) { issues = ['Inspect error: ' + e.message]; }
+    results.push({ label: s.label, tier: s.tier, allReal: s.allReal, scen: s, issues });
+    /* Render only the FAILS into the visible log (and only first 50
+       so the page stays usable). */
+    if (issues.length && results.filter(r => r.issues.length).length <= 50) {
+      const wrap = document.createElement('div');
+      wrap.className = 'scen';
+      wrap.innerHTML = '<h3>' + s.label + (s.allReal ? '' : ' <span style="color:#888;font-weight:400">(synthetic)</span>') + '</h3>'
+        + '<div class="meta">' + s.tier + ' · ' + s.tokens.PLAYER_FIRST + ' ' + s.tokens.PLAYER_LAST
+        + (s.tokens.DIVISION_NAME ? ' · ' + s.tokens.DIVISION_NAME : '')
+        + (s.tokens.ACH_TYPE ? ' · ' + s.tokens.ACH_TYPE : '')
+        + (s.tokens.ACH_COUNT ? ' · count=' + s.tokens.ACH_COUNT : '')
+        + '</div>'
+        + '<div class="issues"><strong>Issues (' + issues.length + ')</strong><ul>'
+        +   issues.map(x => '<li>' + x.replace(/</g,'&lt;') + '</li>').join('')
+        + '</ul></div>';
+      root.appendChild(wrap);
+    }
+    if (i % 50 === 0) document.getElementById('hdrStatus').textContent = 'Scenario ' + (i+1) + '/' + scenarios.length;
+  }
+  const fails = results.filter(r => r.issues.length);
+  const sum = document.getElementById('summary');
+  const tierStats = {};
+  for (const r of results) {
+    if (!tierStats[r.tier]) tierStats[r.tier] = { total: 0, fail: 0 };
+    tierStats[r.tier].total++;
+    if (r.issues.length) tierStats[r.tier].fail++;
+  }
+  sum.innerHTML = '<table>'
+    + '<tr><th>Tier</th><th>Scenarios</th><th>Passed</th><th>Failed</th></tr>'
+    + Object.entries(tierStats).map(([t, s]) =>
+      '<tr><td>' + t + '</td><td>' + s.total + '</td><td class="pass">' + (s.total - s.fail) + '</td><td class="' + (s.fail ? 'fail' : 'pass') + '">' + s.fail + '</td></tr>'
+    ).join('')
+    + '<tr style="background:#f9fafb;font-weight:600"><td>TOTAL</td><td>' + results.length + '</td>'
+    + '<td class="pass">' + (results.length - fails.length) + '</td>'
+    + '<td class="' + (fails.length ? 'fail' : 'pass') + '">' + fails.length + '</td></tr>'
+    + '</table>';
+  status.textContent = 'Done — ' + results.length + ' scenarios, ' + fails.length + ' with issues';
+  window.validationResults = results;
+  window.validationSummary = { total: results.length, failed: fails.length, byTier: tierStats };
+}
+
+main().catch(e => {
+  document.getElementById('hdrStatus').textContent = 'ERROR: ' + e.message;
+  console.error(e);
+});
+</script>
+</body>
+</html>

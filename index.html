@@ -1207,7 +1207,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.37';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.38';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
 /* GAS apa-mailer endpoint (action=optout_confirm_send). Fires a
    confirmation email when a player's opt-out choices actually change on
    save. Player-triggered mode: no admin key required, rate-limited per
@@ -1885,6 +1885,15 @@ function renderReportInfo() {
 
 /* ── Player search ── */
 function teamDisplay(divNum, teamNum) {
+  /* Unknown-team patch (Slate 3.268+). All-League is the truth for WHETHER
+     an SP exists; By-Division is the only thing that ties it to a team. When
+     a player is removed from the team before By-Division ever sees the SP,
+     nothing can attribute it — the operator gives the patch anyway from the
+     Unclaimed-SPs list, with sentinels team_number '00000' + division ''.
+     Say "unknown team" plainly: without this the derive-division-from-team
+     logic below would turn '00000' into a nonsense division '000' and the
+     lookup would just return null, rendering a blank where the team goes. */
+  if (String(teamNum || '') === '00000') return 'unknown team';
   /* Shutout (sp_skunk_events) and slam events arrive with
      division_number=null. APA team_numbers encode the division as
      all digits except the last two (e.g. "1001" = div 010 team 01,
