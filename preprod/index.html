@@ -722,27 +722,118 @@
         margin-top: 2px;
       }
 
-      /* ── Opt-Out CTA ── */
-
+      /* ── Opt-Out CTA ──
+       * Mirrors the certs-cta pattern (icon | body | chevron with a
+       * colored 5px left border) so PatchCheck's three CTAs form a
+       * consistent language:
+       *   🏆 certs  → gold accent  (achievements)
+       *   ⚠  fix-it → red gradient (urgent report)
+       *   🎖️ opt-out → blue accent (preferences)
+       * The blue accent uses --spm-accent so it clearly reads as an
+       * SPM-brand action, distinct from the certs gold + fix-it red. */
       .opt-out {
-        display: block;
-        text-align: center;
-        padding: 10px;
-        margin-bottom: 8px;
-        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
         background: var(--card);
-        border: 1.5px solid var(--border);
-        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+        border: 1px solid var(--border);
+        border-left: 5px solid var(--spm-accent);
+        border-radius: 12px;
+        padding: 13px 16px;
+        margin-bottom: 8px;
+        text-align: left;
         text-decoration: none;
         color: var(--text);
-        font-size: 0.82rem;
-        font-weight: 700;
-        line-height: 1.3;
+        font-family: inherit;
+        cursor: pointer;
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.10);
+        transition: transform 0.08s ease, box-shadow 0.14s ease;
       }
+      .opt-out:hover  { transform: translateY(-1px); box-shadow: 0 5px 16px rgba(0, 0, 0, 0.14); }
+      .opt-out:active { transform: translateY(0);    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12); }
+      .opt-out:focus-visible { outline: 3px solid rgba(0, 49, 161, 0.35); outline-offset: 2px; }
+
+      .opt-out-icon    { font-size: 1.7rem; line-height: 1; flex: 0 0 auto; }
+      .opt-out-body    { flex: 1 1 auto; min-width: 0; text-align: left; }
+      .opt-out-label   { display: block; font-size: 1rem;   font-weight: 800; color: var(--spm-accent); line-height: 1.2; }
+      .opt-out-chevron { font-size: 1.5rem; font-weight: 700; color: var(--spm-accent); flex: 0 0 auto; line-height: 1; }
+
+      /* ── Patch Opt-Out modal ── */
+      .optout-modal-backdrop {
+        display: none;
+        position: fixed; inset: 0;
+        background: rgba(20, 30, 50, 0.55);
+        z-index: 200;
+        align-items: center; justify-content: center;
+        padding: 12px;
+      }
+      .optout-modal-backdrop.shown { display: flex; }
+      .optout-modal {
+        background: var(--card);
+        border-radius: 18px;
+        max-width: 460px; width: 100%;
+        max-height: 88vh; overflow-y: auto;
+        padding: 18px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+      }
+      .optout-title { margin: 0 0 4px; font-size: 1.1rem; font-weight: 800; color: var(--text); }
+      .optout-sub   { margin: 0 0 10px; font-size: 0.78rem; color: var(--muted); }
+      .optout-bulk-row {
+        display: flex; gap: 8px; margin: 10px 0 14px;
+      }
+      .optout-bulk-btn {
+        flex: 1; padding: 10px; border-radius: 10px;
+        border: 1.5px solid var(--border); background: var(--card);
+        font-family: inherit; font-size: 0.86rem; font-weight: 700;
+        cursor: pointer;
+      }
+      .optout-bulk-btn.all-on  { color: #0a6b3a; border-color: #0a6b3a; }
+      .optout-bulk-btn.all-off { color: #b91c1c; border-color: #b91c1c; }
+      .optout-bulk-btn:hover { filter: brightness(0.98); }
+      .optout-chip-list {
+        display: flex; flex-direction: column; gap: 6px;
+        margin: 0 0 14px;
+      }
+      .optout-row {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 12px; border-radius: 10px;
+        border: 1.5px solid var(--border);
+        background: #fff; cursor: pointer;
+        font-family: inherit; font-size: 0.9rem;
+        text-align: left; width: 100%;
+      }
+      .optout-row .optout-icon {
+        font-size: 1.1rem; font-weight: 800;
+        min-width: 22px; text-align: center;
+      }
+      .optout-row.on  { border-color: #0a6b3a; }
+      .optout-row.on  .optout-icon { color: #0a6b3a; }
+      .optout-row.off { border-color: #b91c1c; background: #fff5f5; }
+      .optout-row.off .optout-icon { color: #b91c1c; }
+      .optout-actions {
+        display: flex; gap: 8px; justify-content: flex-end;
+      }
+      .optout-actions button {
+        padding: 10px 16px; border-radius: 10px;
+        border: 1.5px solid var(--border); background: var(--card);
+        font-family: inherit; font-size: 0.9rem; font-weight: 700;
+        cursor: pointer;
+      }
+      .optout-actions .primary {
+        background: var(--spm-red, #ea002a);
+        color: #fff; border-color: var(--spm-red, #ea002a);
+      }
+      .optout-status {
+        margin: 4px 0 8px; font-size: 0.78rem; color: var(--muted);
+        text-align: center; min-height: 16px;
+      }
+      .optout-status.err { color: #b91c1c; }
+      .optout-status.ok  { color: #0a6b3a; }
 
       .opt-out-sub {
         display: block;
-        font-size: 0.62rem;
+        font-size: 0.74rem;
         font-weight: 500;
         color: var(--muted);
         margin-top: 2px;
@@ -929,16 +1020,14 @@
         .opt-out {
           flex: 1;
           border-radius: 10px;
-          font-size: 0.75rem;
-          padding: 10px;
+          padding: 10px 12px;
           margin-bottom: 0;
-          transition: transform 0.15s ease, box-shadow 0.15s ease;
+          gap: 8px;
         }
-        .opt-out:hover {
-          transform: translateY(-1px);
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-        }
-        .opt-out-sub { font-size: 0.56rem; }
+        .opt-out-icon    { font-size: 1.35rem; }
+        .opt-out-label   { font-size: 0.86rem; }
+        .opt-out-sub     { font-size: 0.66rem; }
+        .opt-out-chevron { font-size: 1.2rem; }
 
         .footer-note { font-size: 0.75rem; margin-top: 16px; }
       }
@@ -1046,12 +1135,38 @@
           <span class="fix-it-sub">Tap here to report a missing one</span>
         </a>
 
-        <a class="opt-out" href="https://bit.ly/PatchOptOut" target="_blank">
-          Too Awesome for More Patches?
-          <span class="opt-out-sub">Opt out of one or more patches here</span>
-        </a>
+        <button class="opt-out" type="button" onclick="openOptoutModal()"
+                aria-haspopup="dialog" aria-controls="optoutModal">
+          <span class="opt-out-icon" aria-hidden="true">🎖️</span>
+          <span class="opt-out-body">
+            <span class="opt-out-label">Too Awesome for More Patches?</span>
+            <span class="opt-out-sub">Choose which patches SPM mails you</span>
+          </span>
+          <span class="opt-out-chevron" aria-hidden="true">›</span>
+        </button>
       </div>
       <div class="footer-note" id="appFooter" style="margin-top:10px;"></div>
+    </div>
+
+    <!-- ── Patch Opt-Out modal ─────────────────────────────────────────── -->
+    <div class="optout-modal-backdrop" id="optoutModal"
+         role="dialog" aria-modal="true" aria-labelledby="optoutTitle">
+      <div class="optout-modal">
+        <h3 class="optout-title" id="optoutTitle">Patch preferences</h3>
+        <p class="optout-sub" id="optoutSub">
+          Tap a patch type to toggle whether you receive that patch. Green ✓ = mail it, red ✗ = skip it.
+        </p>
+        <div class="optout-bulk-row">
+          <button type="button" class="optout-bulk-btn all-on" onclick="optoutBulkSet(false)">✓ Check all</button>
+          <button type="button" class="optout-bulk-btn all-off" onclick="optoutBulkSet(true)">✗ X all</button>
+        </div>
+        <div class="optout-chip-list" id="optoutChipList"></div>
+        <div class="optout-status" id="optoutStatus"></div>
+        <div class="optout-actions">
+          <button type="button" onclick="closeOptoutModal()">Cancel</button>
+          <button type="button" class="primary" id="optoutSaveBtn" onclick="saveOptoutModal()">Save</button>
+        </div>
+      </div>
     </div>
 
     <script>
@@ -1092,7 +1207,14 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.29';  // matches apa_core.apps.PatchCheck-preprod
+const APP_VERSION = '1.38';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+/* GAS apa-mailer endpoint (action=optout_confirm_send). Fires a
+   confirmation email when a player's opt-out choices actually change on
+   save. Player-triggered mode: no admin key required, rate-limited per
+   APA# server-side, GAS resolves the email from slate.players so we can't
+   redirect to an attacker address. Failure is non-fatal — save still
+   succeeds even if the email fails. */
+const OPTOUT_CONFIRM_MAILER_URL = 'https://script.google.com/macros/s/AKfycbzGTzkBRTrIIP_tD6sbtOOUmNZkXDdtxPoO4c8fdWt5h3tZFueNSISPv8Q3LWStx73Whw/exec';
                                // 1.10 = Print All now generates a multi-page
                                //        PDF with correct per-page orientation
                                //        (Chrome's @page named-orientation rule
@@ -1217,6 +1339,7 @@ var _sessionMetaCache       = {};
 var _playerSessionDataCache = {};
 var _prefetchToken          = 0;   // monotonic — cancels stale prefetches
 var _lastSearchMember       = '';  // resets the cache when a NEW player is looked up
+var _lastSearchName         = '';  // resolved full name — used by the opt-out modal so we can greet the player
 
 /* ── UI helpers ── */
 function esc(s) {
@@ -1762,6 +1885,15 @@ function renderReportInfo() {
 
 /* ── Player search ── */
 function teamDisplay(divNum, teamNum) {
+  /* Unknown-team patch (Slate 3.268+). All-League is the truth for WHETHER
+     an SP exists; By-Division is the only thing that ties it to a team. When
+     a player is removed from the team before By-Division ever sees the SP,
+     nothing can attribute it — the operator gives the patch anyway from the
+     Unclaimed-SPs list, with sentinels team_number '00000' + division ''.
+     Say "unknown team" plainly: without this the derive-division-from-team
+     logic below would turn '00000' into a nonsense division '000' and the
+     lookup would just return null, rendering a blank where the team goes. */
+  if (String(teamNum || '') === '00000') return 'unknown team';
   /* Shutout (sp_skunk_events) and slam events arrive with
      division_number=null. APA team_numbers encode the division as
      all digits except the last two (e.g. "1001" = div 010 team 01,
@@ -1846,10 +1978,18 @@ function buildEvents(bdRows, skunks, patches, optoutTypes) {
       var p = (e.sp_type === '8m' || e.sp_type === '9m' || e.sp_type === 'g')
         ? patchBySp[e.sp_type]
         : patchByDivSp[e.division_number + '|' + e.sp_type];
-      if (p && p.mailed_at)             statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at);
-      else if (p)                       statusDisplay = 'Not Yet Mailed';
-      else if (optoutTypes.has(e.sp_type)) statusDisplay = 'Opted out — not mailed';
-      else                              statusDisplay = 'Patch earned — will be mailed';
+      /* Precedence (locked in by validate-optout.mjs S1–S5):
+         1. mailed_at set                  → "Patch mailed <date>"
+         2. optout (opt-out wins over any un-mailed state — since Slate
+            3.161 always records the achievement, a naked "Not Yet
+            Mailed" would be misleading for opted-out members whose
+            patches will never actually be mailed)
+         3. patch record exists            → "Not Yet Mailed"
+         4. otherwise                      → "Patch earned — will be mailed" */
+      if (p && p.mailed_at)                  statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at);
+      else if (optoutTypes.has(e.sp_type))   statusDisplay = 'Opted out — not mailed';
+      else if (p)                            statusDisplay = 'Not Yet Mailed';
+      else                                   statusDisplay = 'Patch earned — will be mailed';
     }
 
     return { spDescription: label, week: e.week, team: team,
@@ -1903,6 +2043,7 @@ async function handleSearch(opts) {
       _playerSessionDataCache = {};
       _lastSearchMember = memberShort;
     }
+    _lastSearchName = fullName;
 
     /* Fetch this player's SPM data — through the cache, so revisiting
        a session is free. */
@@ -1919,6 +2060,14 @@ async function handleSearch(opts) {
 
     showMemberPill(memberShort + ' · ' + fullName);
     renderDashboard({ results: results, allSPTypes: sptypes });
+
+    /* Deep-link (1.36): ?optout in the URL queues the opt-out modal to
+       open after the first successful lookup. One-shot — clearing the
+       flag here means a later manual search doesn't re-open it. */
+    if (window._pendingOptoutOpen) {
+      window._pendingOptoutOpen = false;
+      setTimeout(function () { try { openOptoutModal(); } catch (e) { console.warn('[optout-link] open failed', e); } }, 350);
+    }
 
     try { sessionStorage.setItem('patchcheck_lastInput', raw); } catch (e) {}
 
@@ -1944,7 +2093,15 @@ async function checkVersion() {
     var rows = await sbGet('apa_core',
       'apps?app_name=eq.' + APP_NAME + '&select=version');
     var remote = rows && rows[0] && rows[0].version;
-    if (remote && remote !== APP_VERSION) showUpdateOverlay(remote);
+    /* 1.37: only update when remote is NEWER. Remote older than the
+       running page = deploy window (HTML landed, DB not bumped yet) or
+       a DB rollback; showing the overlay would strand this tab
+       (2026-07-02 incident). Skip — the next 30s tick re-evaluates. */
+    if (remote && remote !== APP_VERSION) {
+      var rNum = parseFloat(remote), lNum = parseFloat(APP_VERSION);
+      if (isFinite(rNum) && isFinite(lNum) && rNum < lNum) return;
+      showUpdateOverlay(remote);
+    }
   } catch (e) {}
 }
 /* Canonical overlay (per MEMORY.md "consistency" rule). DOM is statically
@@ -1958,23 +2115,37 @@ function showUpdateOverlay(target) {
   if (ov) ov.classList.add('shown');
   pollForDeploy(target);
 }
-function pollForDeploy(target) {
-  /* Whitespace-tolerant version match — earlier indexOf required exactly
-     one space between APP_VERSION and `=`, so an alignment edit (e.g.
-     "APP_VERSION   = …") made the substring miss forever and the
-     overlay spun until manual refresh. */
-  var escaped = String(target).replace(/[.+*?^${}()|[\]\\]/g, '\\$&');
-  var versionRe = new RegExp("APP_VERSION\\s*=\\s*'" + escaped + "'");
+function pollForDeploy(target, attempt) {
+  attempt = attempt || 0;
+  /* 1.37: give-up cap. If Pages hasn't served ANY new version after
+     ~2 minutes (40 × 3s), the deploy is wedged (GitHub Pages backend
+     failure, 2026-07-02). Dismiss the overlay, reset the latch, and let
+     the 30s checkVersion cycle retry in the background — the player
+     gets the app back instead of an infinite spinner. */
+  if (attempt >= 40) {
+    console.warn('[updater] deploy not served after ~2min — dismissing overlay, retrying in background');
+    var ov = document.getElementById('updateOverlay');
+    if (ov) ov.classList.remove('shown');
+    _updating = false;
+    return;
+  }
   fetch(location.pathname + '?cb=' + Date.now(), { cache: 'no-store' })
     .then(function (r) { return r.text(); })
     .then(function (html) {
-      if (versionRe.test(html)) {
+      /* 1.37: reload when the served version differs from the RUNNING
+         one — not the pinned target. Pinning strands the tab when a
+         second bump (or DB rollback) lands mid-poll: it waits for a
+         version string the HTML will never contain (2026-07-02).
+         Whitespace-tolerant match. */
+      var m = html.match(/APP_VERSION\s*=\s*'([0-9.]+)'/);
+      var served = m ? m[1] : null;
+      if (served && served !== APP_VERSION) {
         location.replace(location.pathname + '?cb=' + Date.now());
       } else {
-        setTimeout(function () { pollForDeploy(target); }, 3000);
+        setTimeout(function () { pollForDeploy(target, attempt + 1); }, 3000);
       }
     })
-    .catch(function () { setTimeout(function () { pollForDeploy(target); }, 3000); });
+    .catch(function () { setTimeout(function () { pollForDeploy(target, attempt + 1); }, 3000); });
 }
 
 /* ── Live data refresh ── */
@@ -2100,10 +2271,22 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (reps && reps[0]) lastReportStamp = reps[0].id + '|' + reps[0].uploaded_at;
   } catch (e) {}
 
-  /* Auto-lookup the saved player on return. */
+  /* Deep-link params (1.36):
+       ?optout          — open the patch opt-out modal after the next
+                          successful lookup (auto or manual)
+       ?apa=<number>    — prefill + auto-run the lookup for that APA #
+     Combined, ?apa=12345&optout goes straight from URL → opt-out modal.
+     The plain ?optout form is what the printed slips / emails can use:
+     the player types their own number and the modal opens by itself. */
+  var qs = new URLSearchParams(location.search);
+  if (qs.has('optout')) window._pendingOptoutOpen = true;
+  var apaParam = (qs.get('apa') || '').trim();
+
+  /* Auto-lookup: URL param wins over the saved player from last visit. */
   var saved = null;
   try { saved = sessionStorage.getItem('patchcheck_lastInput'); } catch (e) {}
-  if (saved) { input.value = saved; handleSearch(); }
+  if (apaParam)   { input.value = apaParam; handleSearch(); }
+  else if (saved) { input.value = saved; handleSearch(); }
   else input.focus();
 
   setInterval(checkVersion, 30000);
@@ -3269,6 +3452,207 @@ document.addEventListener('DOMContentLoaded', function () {
     obs.observe(pill, { attributes:true, childList:true, subtree:true, attributeFilter:['style'] });
   }
   certsDbg('DOMContentLoaded handlers wired (auto-trigger via showMemberPill hook)');
+});
+
+/* ══════════════════════════════════════════════════════════════════════
+   PATCH OPT-OUT MODAL
+   ──────────────────────────────────────────────────────────────────────
+   The 13 SP codes a player can opt out of mirror the Slate admin's
+   OPTOUT_CODES list. State on disk lives in slate.patch_optouts:
+     - No row for a member → they get every patch mailed
+     - Row present → opted_out_types is the ARRAY of codes they DON'T want
+   The modal edits a Set<code> and, on save:
+     - Empty set → DELETE the row (clean restore of "mail everything")
+     - Non-empty set → UPSERT the row with the new array
+   Anon writes are gated by an RLS policy (patch_optouts_anon_write) —
+   see 2026-06-30 migration. This is intentional per user choice: cheap
+   to reverse, low-stakes.
+   ══════════════════════════════════════════════════════════════════════ */
+var _OPTOUT_CODES = ['r','8','x','9','n','k','m8','mx','m9','mn','8m','9m','g'];
+var _optoutState = { memberShort: '', name: '', denied: null, loading: false };
+
+function openOptoutModal() {
+  if (!_lastSearchMember) {
+    alert('Please look yourself up first (enter your APA number or email above), then tap this button.');
+    return;
+  }
+  _optoutState.memberShort = _lastSearchMember;
+  _optoutState.name        = _lastSearchName || '';
+  _optoutState.denied      = new Set();
+  var titleEl = document.getElementById('optoutTitle');
+  var subEl   = document.getElementById('optoutSub');
+  titleEl.textContent = _optoutState.name
+    ? 'Patch preferences — ' + _optoutState.name
+    : 'Patch preferences';
+  subEl.textContent = 'Tap a patch type to toggle whether SPM mails it to you. ' +
+    'Green ✓ = mail it, red ✗ = skip it.';
+  _setOptoutStatus('Loading current preferences…');
+  document.getElementById('optoutModal').classList.add('shown');
+  document.getElementById('optoutSaveBtn').disabled = true;
+
+  /* Load current opt-outs for this member so the chips reflect reality. */
+  sbGet('slate', 'patch_optouts?member_number=eq.'
+      + encodeURIComponent(_optoutState.memberShort)
+      + '&select=opted_out_types')
+    .then(function (rows) {
+      var arr = (rows && rows[0] && rows[0].opted_out_types) || [];
+      _optoutState.denied = new Set(arr);
+      /* Snapshot the state as-loaded so the save handler can diff and
+         only email if something actually changed. */
+      _optoutState.deniedOriginal = new Set(arr);
+      renderOptoutChips();
+      _setOptoutStatus('');
+      document.getElementById('optoutSaveBtn').disabled = false;
+    })
+    .catch(function (e) {
+      renderOptoutChips();
+      _setOptoutStatus('Could not load current preferences: ' + (e.message || e), 'err');
+      document.getElementById('optoutSaveBtn').disabled = false;
+    });
+}
+
+function closeOptoutModal() {
+  document.getElementById('optoutModal').classList.remove('shown');
+}
+
+function _setOptoutStatus(msg, level) {
+  var s = document.getElementById('optoutStatus');
+  s.textContent = msg || '';
+  s.classList.remove('err', 'ok');
+  if (level) s.classList.add(level);
+}
+
+function renderOptoutChips() {
+  var wrap = document.getElementById('optoutChipList');
+  var html = '';
+  for (var i = 0; i < _OPTOUT_CODES.length; i++) {
+    var code    = _OPTOUT_CODES[i];
+    var optedOut = _optoutState.denied.has(code);
+    var label    = SP_LABEL[code] || code;
+    html += '<button type="button" class="optout-row ' + (optedOut ? 'off' : 'on') + '"'
+         +  ' data-code="' + code + '"'
+         +  ' onclick="toggleOptoutChip(\'' + code + '\')">'
+         +    '<span class="optout-icon">' + (optedOut ? '✗' : '✓') + '</span>'
+         +    '<span>' + label + '</span>'
+         +  '</button>';
+  }
+  wrap.innerHTML = html;
+}
+
+function toggleOptoutChip(code) {
+  if (!_optoutState.denied) return;
+  if (_optoutState.denied.has(code)) _optoutState.denied.delete(code);
+  else                               _optoutState.denied.add(code);
+  renderOptoutChips();
+}
+
+function optoutBulkSet(deniedAll) {
+  if (!_optoutState.denied) return;
+  _optoutState.denied = new Set(deniedAll ? _OPTOUT_CODES : []);
+  renderOptoutChips();
+}
+
+/* Persist current state to slate.patch_optouts. Empty denied set means
+   "mail me everything" → DELETE the row so it disappears cleanly. */
+function saveOptoutModal() {
+  if (!_optoutState.memberShort || !_optoutState.denied) return;
+  var mem = _optoutState.memberShort;
+  var denied = _OPTOUT_CODES.filter(function (c) { return _optoutState.denied.has(c); });
+  var btn = document.getElementById('optoutSaveBtn');
+  btn.disabled = true;
+  _setOptoutStatus('Saving…');
+
+  var url, method, body, headers;
+  headers = sbHeaders('slate');
+  if (denied.length === 0) {
+    url = SB_URL + '/rest/v1/patch_optouts?member_number=eq.' + encodeURIComponent(mem);
+    method = 'DELETE';
+    body = null;
+  } else {
+    /* UPSERT so re-opening the modal + saving again works cleanly. */
+    url = SB_URL + '/rest/v1/patch_optouts?on_conflict=member_number';
+    method = 'POST';
+    headers = Object.assign({}, headers,
+      { Prefer: 'resolution=merge-duplicates,return=minimal' });
+    /* Deliberately omit `note` so an admin-set note is preserved on
+       merge-duplicates. Sending note:'' would clobber it — see the
+       C29 assertion in validate-optout.mjs. */
+    body = JSON.stringify({ member_number: mem, opted_out_types: denied });
+  }
+
+  fetch(url, { method: method, headers: headers, body: body })
+    .then(function (r) {
+      if (!r.ok) return r.text().then(function (t) {
+        throw new Error('HTTP ' + r.status + (t ? ': ' + t.slice(0, 120) : ''));
+      });
+      _setOptoutStatus('Saved!', 'ok');
+      /* Bust cache: any renderer that reads patch_optouts should see the new state next fetch. */
+      _playerSessionDataCache = {};
+      /* Diff vs. as-loaded snapshot. If anything changed, fire the
+         confirmation email via GAS. Non-blocking — save is complete
+         either way; email failure just gets logged silently. */
+      try {
+        var before = _optoutState.deniedOriginal || new Set();
+        var after  = _optoutState.denied         || new Set();
+        var added   = [];
+        var removed = [];
+        after.forEach(function (c)  { if (!before.has(c)) added.push(c); });
+        before.forEach(function (c) { if (!after.has(c))  removed.push(c); });
+        console.log('[optout-confirm] diff', {
+          apa:     _optoutState.memberShort,
+          before:  Array.from(before),
+          after:   Array.from(after),
+          added:   added,
+          removed: removed
+        });
+        if (added.length || removed.length) {
+          console.log('[optout-confirm] firing email');
+          /* keepalive:true so the request survives the modal close /
+             navigation. Without it, some browsers cancel in-flight
+             fetches when the calling element goes away. */
+          fetch(OPTOUT_CONFIRM_MAILER_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action:        'optout_confirm_send',
+              apa_number:    _optoutState.memberShort,   // GAS accepts 5- or 8-digit
+              added_codes:   added,
+              removed_codes: removed
+            }),
+            redirect:  'follow',
+            keepalive: true
+          }).then(function (r) {
+            return r.text().then(function (t) {
+              var res = null;
+              try { res = JSON.parse(t); } catch (_) { res = { raw: t.slice(0, 200) }; }
+              console.log('[optout-confirm] gas response', r.status, res);
+            });
+          }).catch(function (e) {
+            console.warn('[optout-confirm] fetch failed:', e && e.message);
+          });
+        } else {
+          console.log('[optout-confirm] no diff — skipping email');
+        }
+      } catch (e) {
+        console.warn('[optout-confirm] diff/send skipped:', e && e.message);
+      }
+      setTimeout(closeOptoutModal, 900);
+    })
+    .catch(function (e) {
+      _setOptoutStatus('Save failed: ' + (e.message || e), 'err');
+      btn.disabled = false;
+    });
+}
+
+/* Close the modal on backdrop click + Escape. */
+document.addEventListener('click', function (e) {
+  if (e.target && e.target.id === 'optoutModal') closeOptoutModal();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' &&
+      document.getElementById('optoutModal').classList.contains('shown')) {
+    closeOptoutModal();
+  }
 });
     </script>
   </body>
