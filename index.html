@@ -1473,11 +1473,20 @@ function formatPrintedAt(raw) {
   if (iso) return parseInt(iso[2], 10) + '/' + parseInt(iso[3], 10) + '/' + iso[1];
   return s.replace(/(\d):\d\d\s*([AP]M)/i, '$1 $2');
 }
+/* Label must name WHICH date this is — see SharpShooters (Apps/Leaderboard).
+   data_through is the last day of play covered; source_printed_at is when the
+   report was printed. Both said "Last updated", which reads as "page refreshed
+   on that date", so a current report looked stale. Keep these three apps
+   worded identically; they show the same field from the same table. */
+function reportInfoLabel(raw) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(raw).trim())
+    ? 'Results through ' : 'Report printed ';
+}
 function renderReportInfo() {
   var el = document.getElementById('reportInfo');
   if (!el) return;
   if (_reportPrintedAt) {
-    el.textContent = 'Last updated ' + formatPrintedAt(_reportPrintedAt);
+    el.textContent = reportInfoLabel(_reportPrintedAt) + formatPrintedAt(_reportPrintedAt);
     el.style.display = 'block';
   } else {
     el.textContent = '';
