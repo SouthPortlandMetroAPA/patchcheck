@@ -1207,7 +1207,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.38';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.39';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
 /* GAS apa-mailer endpoint (action=optout_confirm_send). Fires a
    confirmation email when a player's opt-out choices actually change on
    save. Player-triggered mode: no admin key required, rate-limited per
@@ -1682,7 +1682,11 @@ async function loadSessions() {
       'sp_reports?operator_id=eq.' + OPERATOR_ID + '&select=session_id');
     var withData = {};
     reps.forEach(function (r) { withData[r.session_id] = true; });
-    sessions = all.filter(function (s) { return withData[s.id]; });
+    // Keep the CURRENT session selectable even before any SP report is uploaded —
+    // it just renders an empty patch view (no crash; downstream is null-guarded).
+    // Prevents the "can't select this session" bug after a fresh session flips
+    // current with no SP data yet.
+    sessions = all.filter(function (s) { return withData[s.id] || s.is_current; });
     if (!sessions.length) sessions = all;
 
     sel.innerHTML = '';
