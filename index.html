@@ -962,7 +962,7 @@
 
 /* ── App identity ── */
 const APP_NAME    = 'PatchCheck';
-const APP_VERSION = '1.5';
+const APP_VERSION = '1.6';
 
 /* ── Supabase ── */
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
@@ -1376,6 +1376,21 @@ function weekFromDate(d) {
   if (diff < -3) return '';
   return String(Math.max(1, Math.floor(diff / 7) + 1));
 }
+/* " to <name>" for the mail status, or nothing at all.
+   About 16% of mailed patches have no label on file (2,252 of 2,678 carry a
+   contact_name), so this MUST degrade to silence rather than print "mailed to
+   null" or a dangling "to". co_name is the c/o line and is rare -- 10 rows --
+   but when present it is who actually receives the envelope, so it is shown
+   alongside rather than instead. */
+function fmtMailedTo(p) {
+  if (!p) return '';
+  var name = String(p.contact_name || '').trim();
+  var co   = String(p.co_name || '').trim();
+  if (!name && !co) return '';
+  if (name && co) return ' to ' + name + ' c/o ' + co;
+  return ' to ' + (name || co);
+}
+
 function fmtMailDate(ts) {
   if (!ts) return '';
   var d = new Date(ts);
@@ -1570,7 +1585,8 @@ function buildEvents(bdRows, skunks, patches, optoutTypes) {
       var p = (e.sp_type === '8m' || e.sp_type === '9m' || e.sp_type === 'g')
         ? patchBySp[e.sp_type]
         : patchByDivSp[e.division_number + '|' + e.sp_type];
-      if (p && p.mailed_at)             statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at);
+      if (p && p.mailed_at)             statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at)
+                                                        + fmtMailedTo(p);
       else if (p)                       statusDisplay = 'Not Yet Mailed';
       else if (optoutTypes.has(e.sp_type)) statusDisplay = 'Opted out — not mailed';
       else                              statusDisplay = 'Patch earned — will be mailed';
@@ -1632,10 +1648,16 @@ async function handleSearch() {
         + '&member_number=eq.' + encodeURIComponent(memberShort)
         + '&select=event_date,team_number,team_name');
     }
+    /* Reads slate.sp_patch_mailed_to_v, NOT sp_patches_v.
+       The narrow view carries the addressee (contact_name / co_name) and
+       deliberately has no address columns at all, so this page cannot reach a
+       street address even if a future select= asked for one. sp_patches_v was
+       anon-readable until 2026-09-09 and exposed 842 members' addresses to
+       anyone holding this page's anon key; that grant is now revoked. */
     var patches = await sbGet('slate',
-      'sp_patches?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
+      'sp_patch_mailed_to_v?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
       + '&member_number=eq.' + encodeURIComponent(memberShort)
-      + '&select=member_number,division_number,team_number,sp_type,is_slam,mailed_at');
+      + '&select=member_number,division_number,team_number,sp_type,is_slam,mailed_at,contact_name,co_name');
     /* Opt-outs for this player so "will be mailed" doesn't get shown for
        SP codes the player has explicitly opted out of. */
     var optoutRow = await sbGet('slate',
