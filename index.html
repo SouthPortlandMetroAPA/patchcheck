@@ -1207,7 +1207,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.39';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.40';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
 /* GAS apa-mailer endpoint (action=optout_confirm_send). Fires a
    confirmation email when a player's opt-out choices actually change on
    save. Player-triggered mode: no admin key required, rate-limited per
@@ -1664,6 +1664,22 @@ function weekFromDate(d) {
   if (diff < -3) return '';
   return String(Math.max(1, Math.floor(diff / 7) + 1));
 }
+/* " to <name>" for the mail status, or nothing at all.
+   About 16% of mailed patches have no label on file (2,252 of 2,678 carry a
+   contact_name), so this MUST degrade to silence rather than print "mailed to
+   null" or a dangling "to" on a public page. co_name is the c/o line and is
+   rare (10 rows) but when present it is who actually receives the envelope, so
+   it is shown alongside the name rather than instead of it.
+   Name only — never an address. */
+function fmtMailedTo(p) {
+  if (!p) return '';
+  var name = String(p.contact_name || '').trim();
+  var co   = String(p.co_name || '').trim();
+  if (!name && !co) return '';
+  if (name && co) return ' to ' + name + ' c/o ' + co;
+  return ' to ' + (name || co);
+}
+
 function fmtMailDate(ts) {
   if (!ts) return '';
   var d = new Date(ts);
@@ -1815,10 +1831,16 @@ async function fetchPlayerSessionData(sessionId, memberShort) {
       return spmSet.has(div);
     });
   }
+  /* Reads slate.sp_patch_mailed_to_v, NOT sp_patches_v.
+     The narrow view carries the addressee (contact_name / co_name) and has NO
+     address columns at all, so this page cannot reach a street address even if
+     a future select= asked for one. sp_patches_v was anon-readable until
+     2026-09-09 and exposed 842 members' addresses to anyone holding this
+     page's embedded anon key; that grant is now revoked. */
   var patches = await sbGet('slate',
-    'sp_patches?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
+    'sp_patch_mailed_to_v?session_id=eq.' + sessionId + '&operator_id=eq.' + OPERATOR_ID
     + '&member_number=eq.' + encodeURIComponent(memberShort)
-    + '&select=member_number,division_number,team_number,sp_type,is_slam,mailed_at');
+    + '&select=member_number,division_number,team_number,sp_type,is_slam,mailed_at,contact_name,co_name');
   var optoutRow = await sbGet('slate',
     'patch_optouts?member_number=eq.' + encodeURIComponent(memberShort)
     + '&select=opted_out_types');
@@ -1990,7 +2012,8 @@ function buildEvents(bdRows, skunks, patches, optoutTypes) {
             patches will never actually be mailed)
          3. patch record exists            → "Not Yet Mailed"
          4. otherwise                      → "Patch earned — will be mailed" */
-      if (p && p.mailed_at)                  statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at);
+      if (p && p.mailed_at)                  statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at)
+                                                               + fmtMailedTo(p);
       else if (optoutTypes.has(e.sp_type))   statusDisplay = 'Opted out — not mailed';
       else if (p)                            statusDisplay = 'Not Yet Mailed';
       else                                   statusDisplay = 'Patch earned — will be mailed';
