@@ -697,37 +697,18 @@
         margin-top: 2px;
       }
 
-      /* ── Fix-It CTA ── */
-
-      .fix-it {
-        display: block;
-        text-align: center;
-        padding: 12px 10px;
-        margin-bottom: 8px;
-        border-radius: 12px;
-        background: linear-gradient(135deg, var(--spm-primary), var(--spm-accent));
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
-        text-decoration: none;
-        color: #fff;
-        font-size: 0.88rem;
-        font-weight: 800;
-        line-height: 1.3;
-      }
-
-      .fix-it-sub {
-        display: block;
-        font-size: 0.68rem;
-        font-weight: 500;
-        opacity: 0.9;
-        margin-top: 2px;
-      }
+      /* ── Fix-It CTA (1.42) — same card as the other two, red accent = "report" ── */
+      .opt-out.fix-it-card { border-left-color: var(--spm-primary); }
+      .opt-out.fix-it-card .opt-out-label,
+      .opt-out.fix-it-card .opt-out-chevron { color: var(--spm-primary); }
+      .opt-out.fix-it-card:focus-visible { outline-color: rgba(234, 0, 42, 0.35); }
 
       /* ── Opt-Out CTA ──
        * Mirrors the certs-cta pattern (icon | body | chevron with a
        * colored 5px left border) so PatchCheck's three CTAs form a
        * consistent language:
        *   🏆 certs  → gold accent  (achievements)
-       *   ⚠  fix-it → red gradient (urgent report)
+       *   📝 fix-it → red accent   (report a missed patch)
        *   🎖️ opt-out → blue accent (preferences)
        * The blue accent uses --spm-accent so it clearly reads as an
        * SPM-brand action, distinct from the certs gold + fix-it red. */
@@ -1007,16 +988,6 @@
           gap: 10px;
           margin-bottom: 10px;
         }
-        .fix-it {
-          flex: 1;
-          border-radius: 10px;
-          font-size: 0.82rem;
-          padding: 10px;
-          margin-bottom: 0;
-          transition: filter 0.15s ease;
-        }
-        .fix-it:hover { filter: brightness(1.08); }
-        .fix-it-sub { font-size: 0.62rem; }
         .opt-out {
           flex: 1;
           border-radius: 10px;
@@ -1130,10 +1101,15 @@
       </div>
 
       <div class="cta-row">
-        <a class="fix-it" href="https://bit.ly/SPMFixIt" target="_blank">
-          We missed one? Let us know!
-          <span class="fix-it-sub">Tap here to report a missing one</span>
-        </a>
+        <button class="opt-out fix-it-card" type="button" onclick="openFixitModal()"
+                aria-haspopup="dialog" aria-controls="fixitModal">
+          <span class="opt-out-icon" aria-hidden="true">📝</span>
+          <span class="opt-out-body">
+            <span class="opt-out-label">We missed one? Let us know!</span>
+            <span class="opt-out-sub">Report a patch that is not showing</span>
+          </span>
+          <span class="opt-out-chevron" aria-hidden="true">›</span>
+        </button>
 
         <button class="opt-out" type="button" onclick="openOptoutModal()"
                 aria-haspopup="dialog" aria-controls="optoutModal">
@@ -1144,7 +1120,7 @@
           </span>
           <span class="opt-out-chevron" aria-hidden="true">›</span>
         </button>
-        <button class="opt-out" type="button" onclick="openOopsModal()" style="margin-top:10px"
+        <button class="opt-out" type="button" onclick="openOopsModal()"
                 aria-haspopup="dialog" aria-controls="oopsModal">
           <span class="opt-out-icon" aria-hidden="true">🎱</span>
           <span class="opt-out-body">
@@ -1158,25 +1134,57 @@
     </div>
 
     <!-- ── Patch Opt-Out modal ─────────────────────────────────────────── -->
+    <div class="optout-modal-backdrop" id="fixitModal" role="dialog" aria-modal="true" aria-labelledby="fxTitle">
+      <div class="optout-modal">
+        <h3 class="optout-title" id="fxTitle">We missed one? Let us know!</h3>
+        <p class="optout-sub" id="fxSub">Tell us the team, the week and the patch. We pull the scoresheet and check.</p>
+        <div id="fxLoading" class="optout-sub" style="padding:8px 0">Loading your teams…</div>
+        <div id="fxNoTeams" style="display:none" class="optout-sub"></div>
+        <form id="fxForm" novalidate style="display:none">
+          <label class="optout-sub" for="fxTeam" style="display:block;margin:10px 0 4px;font-weight:700">Which team?</label>
+          <select id="fxTeam" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit;min-height:48px;background:var(--card)"></select>
+          <label class="optout-sub" for="fxWeek" style="display:block;margin:10px 0 4px;font-weight:700">Which week?</label>
+          <select id="fxWeek" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit;min-height:48px;background:var(--card)"></select>
+          <div id="fxWeekLine" class="optout-sub" style="margin:6px 0 0;min-height:1.2em"></div>
+          <div class="optout-sub" style="margin:12px 0 4px;font-weight:700">What did we miss? <span style="font-weight:400">(tick all that apply)</span></div>
+          <div id="fxPatches" class="optout-chip-list"></div>
+          <label class="optout-sub" for="fxNote" style="display:block;margin:10px 0 4px;font-weight:700">Anything else? <span style="font-weight:400">(optional)</span></label>
+          <textarea id="fxNote" maxlength="500" rows="2" placeholder="Which match, which game, who you played…" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit"></textarea>
+          <input type="text" id="fxHp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+          <div id="fxErr" style="color:var(--spm-primary);font-size:.9rem;min-height:1.2em;margin-top:6px" role="alert"></div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button type="button" class="optout-bulk-btn" onclick="closeFixitModal()" style="flex:0 0 auto;min-height:48px">Cancel</button>
+            <button type="submit" class="optout-bulk-btn" id="fxSend" disabled style="color:#fff;background:linear-gradient(135deg,var(--spm-primary),var(--spm-accent));border-color:transparent;min-height:48px">Send my report</button>
+          </div>
+        </form>
+        <div id="fxDone" style="display:none;text-align:center;padding:12px 4px">
+          <div style="font-size:2.2rem">📝</div>
+          <h3 class="optout-title">Report received.</h3>
+          <p class="optout-sub" id="fxDoneMsg" style="font-size:.92rem"></p>
+          <button type="button" class="optout-bulk-btn" onclick="closeFixitModal()" style="min-height:48px;width:100%">Close</button>
+        </div>
+      </div>
+    </div>
     <div class="optout-modal-backdrop" id="oopsModal" role="dialog" aria-modal="true" aria-labelledby="oopsTitle">
       <div class="optout-modal">
         <h3 class="optout-title" id="oopsTitle">Claim your OOPS Coin</h3>
         <p class="optout-sub" id="oopsSub">For the rarest shot in pool: the 8-ball drops on the break and the cue ball follows it in. Instant win, instant loss. The league checks the claim, then the coin and its citation go in the mail to the address on your APA record.</p>
-        <form id="oopsForm" novalidate>
-          <label class="optout-sub" for="oopsDate" style="display:block;margin:10px 0 4px;font-weight:700">When did it happen?</label>
-          <input type="date" id="oopsDate" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit;min-height:48px">
-          <label class="optout-sub" for="oopsVenue" style="display:block;margin:10px 0 4px;font-weight:700">Where? <span style="font-weight:400">(optional)</span></label>
-          <input type="text" id="oopsVenue" maxlength="80" placeholder="Bar name" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit;min-height:48px">
-          <label class="optout-sub" for="oopsOpp" style="display:block;margin:10px 0 4px;font-weight:700">Against whom? <span style="font-weight:400">(optional)</span></label>
-          <input type="text" id="oopsOpp" maxlength="80" placeholder="Opponent or team" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit;min-height:48px">
+        <div id="oopsLoading" class="optout-sub" style="padding:8px 0">Loading your teams…</div>
+        <div id="oopsNoTeams" style="display:none" class="optout-sub"></div>
+        <form id="oopsForm" novalidate style="display:none">
+          <label class="optout-sub" for="oopsTeam" style="display:block;margin:10px 0 4px;font-weight:700">Which team?</label>
+          <select id="oopsTeam" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit;min-height:48px;background:var(--card)"></select>
+          <label class="optout-sub" for="oopsWeek" style="display:block;margin:10px 0 4px;font-weight:700">Which week?</label>
+          <select id="oopsWeek" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit;min-height:48px;background:var(--card)"></select>
+          <div id="oopsLine" class="optout-sub" style="margin:6px 0 0;min-height:1.2em"></div>
           <label class="optout-sub" for="oopsNote" style="display:block;margin:10px 0 4px;font-weight:700">Anything else? <span style="font-weight:400">(optional)</span></label>
-          <textarea id="oopsNote" maxlength="500" rows="3" placeholder="Witnesses, the table, how it felt…" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit"></textarea>
-          <label style="display:flex;gap:10px;align-items:flex-start;margin:14px 0 6px;cursor:pointer;min-height:44px"><input type="checkbox" id="oopsConfirm" style="width:22px;height:22px;flex:0 0 auto;margin-top:2px"><span style="font-size:.92rem"><b>I made the 8-ball on the break and scratched on the same shot.</b> The league may check the scoresheet.</span></label>
+          <textarea id="oopsNote" maxlength="500" rows="2" placeholder="Which game, who saw it, how it felt…" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit"></textarea>
+          <label style="display:flex;gap:10px;align-items:flex-start;margin:14px 0 6px;cursor:pointer;min-height:44px"><input type="checkbox" id="oopsConfirm" style="width:22px;height:22px;flex:0 0 auto;margin-top:2px"><span style="font-size:.92rem"><b>I made the 8-ball on the break and scratched on the same shot.</b></span></label>
           <input type="text" id="oopsHp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
-          <div id="oopsErr" style="color:var(--spm-primary);font-size:.9rem;min-height:1.2em;margin-top:6px"></div>
+          <div id="oopsErr" style="color:var(--spm-primary);font-size:.9rem;min-height:1.2em;margin-top:6px" role="alert"></div>
           <div style="display:flex;gap:8px;margin-top:8px">
             <button type="button" class="optout-bulk-btn" onclick="closeOopsModal()" style="flex:0 0 auto;min-height:48px">Cancel</button>
-            <button type="submit" class="optout-bulk-btn" id="oopsSend" style="color:#fff;background:linear-gradient(135deg,var(--spm-primary),var(--spm-accent));border-color:transparent;min-height:48px">Send my claim</button>
+            <button type="submit" class="optout-bulk-btn" id="oopsSend" disabled style="color:#fff;background:linear-gradient(135deg,var(--spm-primary),var(--spm-accent));border-color:transparent;min-height:48px">Send my claim</button>
           </div>
         </form>
         <div id="oopsDone" style="display:none;text-align:center;padding:12px 4px">
@@ -1245,7 +1253,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.41';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.42';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
 /* GAS apa-mailer endpoint (action=optout_confirm_send). Fires a
    confirmation email when a player's opt-out choices actually change on
    save. Player-triggered mode: no admin key required, rate-limited per
@@ -3536,35 +3544,145 @@ document.addEventListener('DOMContentLoaded', function () {
 var _OPTOUT_CODES = ['r','8','x','9','n','k','m8','mx','m9','mn','8m','9m','g'];
 var _optoutState = { memberShort: '', name: '', denied: null, loading: false };
 
-/* ── OOPS Coin claim (brief 2026-09-16) ──────────────────────────────────
-   Same identity as the opt-out card: the player looked up above. Submit goes to
-   rpc oopscoin.submit (anon; server validates member, date, limits, confirm box,
-   honeypot, fill-timer) and returns a one-time notify_token; the mailer redeems
-   it for the ack (email ON FILE) + office notify. No address is shown or typed. */
-var _oopsOpened = 0;
-function openOopsModal() {
-  if (!_lastSearchMember) { alert('Please look yourself up first (enter your APA number or email above), then tap this button.'); return; }
-  _oopsOpened = Date.now();
-  var d = new Date(), iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  var dt = document.getElementById('oopsDate'); dt.value = iso; dt.max = iso;
-  document.getElementById('oopsForm').style.display = ''; document.getElementById('oopsDone').style.display = 'none';
-  document.getElementById('oopsErr').textContent = ''; document.getElementById('oopsSend').disabled = false;
-  document.getElementById('oopsSub').textContent = (_lastSearchName ? _lastSearchName + ', ' : '') + 'for the rarest shot in pool: the 8-ball drops on the break and the cue ball follows it in. Instant win, instant loss. The league checks the claim, then the coin and its citation go in the mail to the address on your APA record.';
-  document.getElementById('oopsModal').classList.add('shown');
+/* ── Match picker shared by the Fix-It and OOPS claims (brief 2026-09-16-fixit-missed-patch) ──
+   Identity = the player looked up above, in the session the picker shows. rpc fixit.player_context
+   returns their SPM teams, each with the schedule rows already played (week · date · opponent ·
+   home/away) and the patch kinds the division format allows. Both submits re-derive all of it
+   server-side (fixit.resolve_match); the client only sends team number + week. */
+function mxEl(id) { return document.getElementById(id); }
+function mxFmtDate(iso) { if (!iso) return ''; var p = String(iso).split('-'); return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }); }
+function mxSessionName() { var sel = mxEl('sessionSelect'); return sel && sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : 'this session'; }
+async function mxLoadContext() {
+  var sessionId = currentSession || parseInt(mxEl('sessionSelect').value, 10);
+  var ctx = await sbRpc('fixit', 'player_context', { p_member: _lastSearchMember, p_session_id: sessionId, p_operator_id: OPERATOR_ID });
+  if (!ctx || !ctx.ok) throw new Error((ctx && ctx.error) || 'context');
+  ctx.sessionId = sessionId; ctx.teams = ctx.teams || [];
+  return ctx;
 }
-function closeOopsModal() { document.getElementById('oopsModal').classList.remove('shown'); }
-document.getElementById('oopsForm').addEventListener('submit', async function (e) {
-  e.preventDefault();
-  var err = document.getElementById('oopsErr'); err.textContent = '';
-  if (!document.getElementById('oopsConfirm').checked) { err.textContent = 'Tick the box to confirm what happened.'; return; }
-  var date = document.getElementById('oopsDate').value; if (!date) { err.textContent = 'When did it happen?'; return; }
-  var btn = document.getElementById('oopsSend'); btn.disabled = true;
+function mxNoTeamsHtml() { return 'We do not see you on a South Portland Metro team in ' + escapeHtml(mxSessionName()) + '. If that is wrong, email <a href="mailto:southportlandmetroapa@gmail.com">southportlandmetroapa@gmail.com</a> with your team and the week.'; }
+function mxFillTeams(sel, ctx) {
+  sel.innerHTML = (ctx.teams.length === 1 ? '' : '<option value="">Pick your team</option>') + ctx.teams.map(function (t) {
+    return '<option value="' + escapeHtml(t.team_number) + '">' + escapeHtml(t.team_name || ('Team ' + t.team_number)) + ' (' + escapeHtml(t.team_number) + ') · ' + escapeHtml(t.division_name || '') + '</option>';
+  }).join('');
+}
+function mxTeam(ctx, sel) { var v = sel.value; return ctx.teams.filter(function (t) { return t.team_number === v; })[0] || null; }
+function mxFillWeeks(sel, team) {
+  if (!team) { sel.innerHTML = '<option value="">Pick the team first</option>'; return; }
+  if (team.weeks && team.weeks.length) {
+    sel.innerHTML = '<option value="">Pick the week</option>' + team.weeks.map(function (w) {
+      return '<option value="' + w.week + '">Week ' + w.week + ' · ' + mxFmtDate(w.date) + (w.opponent_name ? ' · vs ' + escapeHtml(w.opponent_name) : '') + (w.home === true ? ' (home)' : w.home === false ? ' (away)' : '') + (w.row_type === 'playoff' ? ' · playoff' : '') + '</option>';
+    }).join('');
+  } else {
+    var opts = ''; for (var i = 1; i <= 16; i++) opts += '<option value="' + i + '">Week ' + i + '</option>';
+    sel.innerHTML = '<option value="">Pick the week</option>' + opts;
+  }
+}
+function mxLineHtml(team, weekVal) {
+  if (!team) return '';
+  if (!team.weeks || !team.weeks.length) return 'We do not have your schedule on file yet. Pick the week from your scoresheet.';
+  var v = parseInt(weekVal, 10), w = team.weeks.filter(function (x) { return x.week === v; })[0];
+  if (!w) return 'Only weeks already played are listed.';
+  return 'Week ' + w.week + ' · ' + mxFmtDate(w.date) + (w.opponent_name ? ' · you played <b>' + escapeHtml(w.opponent_name) + '</b> (' + escapeHtml(w.opponent_number || '') + ')' : '') + (w.home === true ? ' · at home' : w.home === false ? ' · away' : '');
+}
+function mxNotify(action, token) { if (!token) return; try { fetch(OPTOUT_CONFIRM_MAILER_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: action, token: token }) }); } catch (_) {} }
+
+/* ── Fix-It claim ── */
+var _fxOpened = 0, _fxCtx = null, _fxTeam = null;
+async function openFixitModal() {
+  if (!_lastSearchMember) { alert('Please look yourself up first (enter your APA number or email above), then tap this button.'); return; }
+  _fxOpened = Date.now(); _fxCtx = null; _fxTeam = null;
+  mxEl('fxForm').style.display = 'none'; mxEl('fxDone').style.display = 'none'; mxEl('fxNoTeams').style.display = 'none';
+  mxEl('fxLoading').style.display = ''; mxEl('fxLoading').textContent = 'Loading your teams…'; mxEl('fxErr').textContent = ''; mxEl('fxNote').value = ''; mxEl('fxSend').disabled = true;
+  mxEl('fxSub').textContent = (_lastSearchName ? _lastSearchName + ', tell' : 'Tell') + ' us the team, the week and the patch. We pull the scoresheet and check.';
+  mxEl('fixitModal').classList.add('shown');
   try {
-    var r = await sbRpc('oopscoin', 'submit', { p_member: _lastSearchMember, p_incident_date: date, p_venue: document.getElementById('oopsVenue').value.trim(), p_opponent: document.getElementById('oopsOpp').value.trim(), p_note: document.getElementById('oopsNote').value.trim(), p_confirmed: true, p_hp: document.getElementById('oopsHp').value, p_fill_ms: Date.now() - _oopsOpened });
+    var ctx = await mxLoadContext();
+    mxEl('fxLoading').style.display = 'none';
+    if (!ctx.teams.length) { mxEl('fxNoTeams').innerHTML = mxNoTeamsHtml(); mxEl('fxNoTeams').style.display = ''; return; }
+    _fxCtx = ctx; mxFillTeams(mxEl('fxTeam'), ctx);
+    mxEl('fxForm').style.display = '';
+    fxPickTeam();
+  } catch (ex) { mxEl('fxLoading').textContent = 'Could not load your teams. Check your connection and try again.'; }
+}
+function fxPickTeam() {
+  _fxTeam = _fxCtx ? mxTeam(_fxCtx, mxEl('fxTeam')) : null;
+  mxFillWeeks(mxEl('fxWeek'), _fxTeam);
+  mxEl('fxWeekLine').innerHTML = mxLineHtml(_fxTeam, mxEl('fxWeek').value);
+  mxEl('fxPatches').innerHTML = (_fxTeam && _fxTeam.kinds || []).map(function (c) {
+    return '<label class="optout-row" style="cursor:pointer"><input type="checkbox" name="fxPatch" value="' + escapeHtml(c) + '" style="width:22px;height:22px;flex:0 0 auto"><span style="flex:1;font-weight:700">' + escapeHtml(SP_LABEL[c] || c) + '</span></label>';
+  }).join('');
+  mxEl('fxPatches').querySelectorAll('input[name=fxPatch]').forEach(function (r) { r.addEventListener('change', fxSyncSend); });
+  fxSyncSend();
+}
+function fxSyncSend() {
+  var ok = !!_fxTeam && !!mxEl('fxWeek').value && mxEl('fxPatches').querySelectorAll('input[name=fxPatch]:checked').length > 0;
+  mxEl('fxSend').disabled = !ok;
+}
+function closeFixitModal() { mxEl('fixitModal').classList.remove('shown'); }
+mxEl('fxTeam').addEventListener('change', fxPickTeam);
+mxEl('fxWeek').addEventListener('change', function () { mxEl('fxWeekLine').innerHTML = mxLineHtml(_fxTeam, mxEl('fxWeek').value); fxSyncSend(); });
+mxEl('fxForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var err = mxEl('fxErr'); err.textContent = '';
+  var patches = Array.prototype.map.call(mxEl('fxPatches').querySelectorAll('input[name=fxPatch]:checked'), function (c) { return c.value; });
+  if (!_fxTeam) { err.textContent = 'Pick your team.'; return; }
+  var week = parseInt(mxEl('fxWeek').value, 10); if (!week) { err.textContent = 'Pick the week.'; return; }
+  if (!patches.length) { err.textContent = 'Tick at least one patch.'; return; }
+  var btn = mxEl('fxSend'); btn.disabled = true;
+  try {
+    var r = await sbRpc('fixit', 'submit', { p_member: _lastSearchMember, p_session_id: _fxCtx.sessionId, p_team_number: _fxTeam.team_number, p_week: week, p_patches: patches, p_note: mxEl('fxNote').value.trim(), p_hp: mxEl('fxHp').value, p_fill_ms: Date.now() - _fxOpened, p_operator_id: OPERATOR_ID });
     if (!r || !r.ok) { err.textContent = (r && r.error) || 'Something went wrong. Try again.'; btn.disabled = false; return; }
-    if (r.notify_token) { try { fetch(OPTOUT_CONFIRM_MAILER_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'oops_request_notify', token: r.notify_token }) }); } catch (_) {} }
-    document.getElementById('oopsDoneMsg').textContent = r.has_email ? 'The league will check it. A note is on its way to the email on your APA record, and the coin follows in the mail if the claim stands.' : 'The league will check it. There is no email on your APA record, so watch the mail: the coin follows if the claim stands.';
-    document.getElementById('oopsForm').style.display = 'none'; document.getElementById('oopsDone').style.display = '';
+    mxNotify('fixit_request_notify', r.notify_token);
+    mxEl('fxDoneMsg').textContent = r.has_email ? 'We will pull the scoresheet and check. A receipt is on its way to the email on your APA record, and you will hear back either way.' : 'We will pull the scoresheet and check. There is no email on your APA record, so watch PatchCheck: the patch shows up here once it is on the books.';
+    mxEl('fxForm').style.display = 'none'; mxEl('fxDone').style.display = '';
+  } catch (ex) { err.textContent = 'Could not send. Check your connection and try again.'; btn.disabled = false; }
+});
+
+/* ── OOPS Coin claim (brief 2026-09-16, v2 keyed to the match) ──
+   Same picker. Submit goes to rpc oopscoin.submit (v2: team + week; server validates roster,
+   schedule, confirm box, honeypot, fill-timer, one open, 3/yr) and returns a one-time
+   notify_token; the mailer redeems it for the ack (email ON FILE) + office notify. */
+var _oopsOpened = 0, _oopsCtx = null, _oopsTeam = null;
+async function openOopsModal() {
+  if (!_lastSearchMember) { alert('Please look yourself up first (enter your APA number or email above), then tap this button.'); return; }
+  _oopsOpened = Date.now(); _oopsCtx = null; _oopsTeam = null;
+  mxEl('oopsForm').style.display = 'none'; mxEl('oopsDone').style.display = 'none'; mxEl('oopsNoTeams').style.display = 'none';
+  mxEl('oopsLoading').style.display = ''; mxEl('oopsLoading').textContent = 'Loading your teams…'; mxEl('oopsErr').textContent = ''; mxEl('oopsNote').value = ''; mxEl('oopsConfirm').checked = false; mxEl('oopsSend').disabled = true;
+  mxEl('oopsSub').textContent = (_lastSearchName ? _lastSearchName + ', ' : '') + 'for the rarest shot in pool: the 8-ball drops on the break and the cue ball follows it in. Instant win, instant loss. The league checks the claim, then the coin and its citation go in the mail to the address on your APA record.';
+  mxEl('oopsModal').classList.add('shown');
+  try {
+    var ctx = await mxLoadContext();
+    mxEl('oopsLoading').style.display = 'none';
+    if (!ctx.teams.length) { mxEl('oopsNoTeams').innerHTML = mxNoTeamsHtml(); mxEl('oopsNoTeams').style.display = ''; return; }
+    _oopsCtx = ctx; mxFillTeams(mxEl('oopsTeam'), ctx);
+    mxEl('oopsForm').style.display = '';
+    oopsPickTeam();
+  } catch (ex) { mxEl('oopsLoading').textContent = 'Could not load your teams. Check your connection and try again.'; }
+}
+function oopsPickTeam() {
+  _oopsTeam = _oopsCtx ? mxTeam(_oopsCtx, mxEl('oopsTeam')) : null;
+  mxFillWeeks(mxEl('oopsWeek'), _oopsTeam);
+  mxEl('oopsLine').innerHTML = mxLineHtml(_oopsTeam, mxEl('oopsWeek').value);
+  oopsSyncSend();
+}
+function oopsSyncSend() { mxEl('oopsSend').disabled = !(_oopsTeam && mxEl('oopsWeek').value && mxEl('oopsConfirm').checked); }
+function closeOopsModal() { mxEl('oopsModal').classList.remove('shown'); }
+mxEl('oopsTeam').addEventListener('change', oopsPickTeam);
+mxEl('oopsWeek').addEventListener('change', function () { mxEl('oopsLine').innerHTML = mxLineHtml(_oopsTeam, mxEl('oopsWeek').value); oopsSyncSend(); });
+mxEl('oopsConfirm').addEventListener('change', oopsSyncSend);
+mxEl('oopsForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var err = mxEl('oopsErr'); err.textContent = '';
+  if (!_oopsTeam) { err.textContent = 'Pick your team.'; return; }
+  var week = parseInt(mxEl('oopsWeek').value, 10); if (!week) { err.textContent = 'Pick the week.'; return; }
+  if (!mxEl('oopsConfirm').checked) { err.textContent = 'Tick the box to confirm what happened.'; return; }
+  var btn = mxEl('oopsSend'); btn.disabled = true;
+  try {
+    var r = await sbRpc('oopscoin', 'submit', { p_member: _lastSearchMember, p_session_id: _oopsCtx.sessionId, p_team_number: _oopsTeam.team_number, p_week: week, p_note: mxEl('oopsNote').value.trim(), p_confirmed: true, p_hp: mxEl('oopsHp').value, p_fill_ms: Date.now() - _oopsOpened, p_operator_id: OPERATOR_ID });
+    if (!r || !r.ok) { err.textContent = (r && r.error) || 'Something went wrong. Try again.'; btn.disabled = false; return; }
+    mxNotify('oops_request_notify', r.notify_token);
+    mxEl('oopsDoneMsg').textContent = r.has_email ? 'The league will check it. A note is on its way to the email on your APA record, and the coin follows in the mail if the claim stands.' : 'The league will check it. There is no email on your APA record, so watch the mail: the coin follows if the claim stands.';
+    mxEl('oopsForm').style.display = 'none'; mxEl('oopsDone').style.display = '';
   } catch (ex) { err.textContent = 'Could not send. Check your connection and try again.'; btn.disabled = false; }
 });
 function openOptoutModal() {
