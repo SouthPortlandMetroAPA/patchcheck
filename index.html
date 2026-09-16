@@ -1144,11 +1144,49 @@
           </span>
           <span class="opt-out-chevron" aria-hidden="true">›</span>
         </button>
+        <button class="opt-out" type="button" onclick="openOopsModal()" style="margin-top:10px"
+                aria-haspopup="dialog" aria-controls="oopsModal">
+          <span class="opt-out-icon" aria-hidden="true">🎱</span>
+          <span class="opt-out-body">
+            <span class="opt-out-label">Made the 8 on the break… and scratched?</span>
+            <span class="opt-out-sub">Claim your OOPS Coin</span>
+          </span>
+          <span class="opt-out-chevron" aria-hidden="true">›</span>
+        </button>
       </div>
       <div class="footer-note" id="appFooter" style="margin-top:10px;"></div>
     </div>
 
     <!-- ── Patch Opt-Out modal ─────────────────────────────────────────── -->
+    <div class="optout-modal-backdrop" id="oopsModal" role="dialog" aria-modal="true" aria-labelledby="oopsTitle">
+      <div class="optout-modal">
+        <h3 class="optout-title" id="oopsTitle">Claim your OOPS Coin</h3>
+        <p class="optout-sub" id="oopsSub">For the rarest shot in pool: the 8-ball drops on the break and the cue ball follows it in. Instant win, instant loss. The league checks the claim, then the coin and its citation go in the mail to the address on your APA record.</p>
+        <form id="oopsForm" novalidate>
+          <label class="optout-sub" for="oopsDate" style="display:block;margin:10px 0 4px;font-weight:700">When did it happen?</label>
+          <input type="date" id="oopsDate" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit;min-height:48px">
+          <label class="optout-sub" for="oopsVenue" style="display:block;margin:10px 0 4px;font-weight:700">Where? <span style="font-weight:400">(optional)</span></label>
+          <input type="text" id="oopsVenue" maxlength="80" placeholder="Bar name" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit;min-height:48px">
+          <label class="optout-sub" for="oopsOpp" style="display:block;margin:10px 0 4px;font-weight:700">Against whom? <span style="font-weight:400">(optional)</span></label>
+          <input type="text" id="oopsOpp" maxlength="80" placeholder="Opponent or team" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit;min-height:48px">
+          <label class="optout-sub" for="oopsNote" style="display:block;margin:10px 0 4px;font-weight:700">Anything else? <span style="font-weight:400">(optional)</span></label>
+          <textarea id="oopsNote" maxlength="500" rows="3" placeholder="Witnesses, the table, how it felt…" style="width:100%;padding:12px;border:1.5px solid var(--border);border-radius:10px;font:inherit"></textarea>
+          <label style="display:flex;gap:10px;align-items:flex-start;margin:14px 0 6px;cursor:pointer;min-height:44px"><input type="checkbox" id="oopsConfirm" style="width:22px;height:22px;flex:0 0 auto;margin-top:2px"><span style="font-size:.92rem"><b>I made the 8-ball on the break and scratched on the same shot.</b> The league may check the scoresheet.</span></label>
+          <input type="text" id="oopsHp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+          <div id="oopsErr" style="color:var(--spm-primary);font-size:.9rem;min-height:1.2em;margin-top:6px"></div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button type="button" class="optout-bulk-btn" onclick="closeOopsModal()" style="flex:0 0 auto;min-height:48px">Cancel</button>
+            <button type="submit" class="optout-bulk-btn" id="oopsSend" style="color:#fff;background:linear-gradient(135deg,var(--spm-primary),var(--spm-accent));border-color:transparent;min-height:48px">Send my claim</button>
+          </div>
+        </form>
+        <div id="oopsDone" style="display:none;text-align:center;padding:12px 4px">
+          <div style="font-size:2.2rem">🎱</div>
+          <h3 class="optout-title">Claim received.</h3>
+          <p class="optout-sub" id="oopsDoneMsg" style="font-size:.92rem"></p>
+          <button type="button" class="optout-bulk-btn" onclick="closeOopsModal()" style="min-height:48px;width:100%">Close</button>
+        </div>
+      </div>
+    </div>
     <div class="optout-modal-backdrop" id="optoutModal"
          role="dialog" aria-modal="true" aria-labelledby="optoutTitle">
       <div class="optout-modal">
@@ -1207,7 +1245,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.40';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.41';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
 /* GAS apa-mailer endpoint (action=optout_confirm_send). Fires a
    confirmation email when a player's opt-out choices actually change on
    save. Player-triggered mode: no admin key required, rate-limited per
@@ -3498,6 +3536,37 @@ document.addEventListener('DOMContentLoaded', function () {
 var _OPTOUT_CODES = ['r','8','x','9','n','k','m8','mx','m9','mn','8m','9m','g'];
 var _optoutState = { memberShort: '', name: '', denied: null, loading: false };
 
+/* ── OOPS Coin claim (brief 2026-09-16) ──────────────────────────────────
+   Same identity as the opt-out card: the player looked up above. Submit goes to
+   rpc oopscoin.submit (anon; server validates member, date, limits, confirm box,
+   honeypot, fill-timer) and returns a one-time notify_token; the mailer redeems
+   it for the ack (email ON FILE) + office notify. No address is shown or typed. */
+var _oopsOpened = 0;
+function openOopsModal() {
+  if (!_lastSearchMember) { alert('Please look yourself up first (enter your APA number or email above), then tap this button.'); return; }
+  _oopsOpened = Date.now();
+  var d = new Date(), iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  var dt = document.getElementById('oopsDate'); dt.value = iso; dt.max = iso;
+  document.getElementById('oopsForm').style.display = ''; document.getElementById('oopsDone').style.display = 'none';
+  document.getElementById('oopsErr').textContent = ''; document.getElementById('oopsSend').disabled = false;
+  document.getElementById('oopsSub').textContent = (_lastSearchName ? _lastSearchName + ', ' : '') + 'for the rarest shot in pool: the 8-ball drops on the break and the cue ball follows it in. Instant win, instant loss. The league checks the claim, then the coin and its citation go in the mail to the address on your APA record.';
+  document.getElementById('oopsModal').classList.add('shown');
+}
+function closeOopsModal() { document.getElementById('oopsModal').classList.remove('shown'); }
+document.getElementById('oopsForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var err = document.getElementById('oopsErr'); err.textContent = '';
+  if (!document.getElementById('oopsConfirm').checked) { err.textContent = 'Tick the box to confirm what happened.'; return; }
+  var date = document.getElementById('oopsDate').value; if (!date) { err.textContent = 'When did it happen?'; return; }
+  var btn = document.getElementById('oopsSend'); btn.disabled = true;
+  try {
+    var r = await sbRpc('oopscoin', 'submit', { p_member: _lastSearchMember, p_incident_date: date, p_venue: document.getElementById('oopsVenue').value.trim(), p_opponent: document.getElementById('oopsOpp').value.trim(), p_note: document.getElementById('oopsNote').value.trim(), p_confirmed: true, p_hp: document.getElementById('oopsHp').value, p_fill_ms: Date.now() - _oopsOpened });
+    if (!r || !r.ok) { err.textContent = (r && r.error) || 'Something went wrong. Try again.'; btn.disabled = false; return; }
+    if (r.notify_token) { try { fetch(OPTOUT_CONFIRM_MAILER_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'oops_request_notify', token: r.notify_token }) }); } catch (_) {} }
+    document.getElementById('oopsDoneMsg').textContent = r.has_email ? 'The league will check it. A note is on its way to the email on your APA record, and the coin follows in the mail if the claim stands.' : 'The league will check it. There is no email on your APA record, so watch the mail: the coin follows if the claim stands.';
+    document.getElementById('oopsForm').style.display = 'none'; document.getElementById('oopsDone').style.display = '';
+  } catch (ex) { err.textContent = 'Could not send. Check your connection and try again.'; btn.disabled = false; }
+});
 function openOptoutModal() {
   if (!_lastSearchMember) {
     alert('Please look yourself up first (enter your APA number or email above), then tap this button.');
