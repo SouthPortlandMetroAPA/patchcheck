@@ -1253,7 +1253,7 @@
 const APP_NAME_BASE = 'PatchCheck';
 const IS_PREPROD    = /\/preprod\//.test(location.pathname);
 const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
-const APP_VERSION = '1.42';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
+const APP_VERSION = '1.43';  // matches apa_core.apps.PatchCheck (or PatchCheck-preprod under /preprod/)
 /* GAS apa-mailer endpoint (action=optout_confirm_send). Fires a
    confirmation email when a player's opt-out choices actually change on
    save. Player-triggered mode: no admin key required, rate-limited per
@@ -1441,10 +1441,14 @@ function clearDashboard() {
 
 /* ── Status classification ── */
 function statusClass(r) {
-  var disp = (r.statusDisplay || '').toLowerCase();
-  if (disp.indexOf('shutout') !== -1) return 'shutout';
-  if (disp.indexOf('already earned') !== -1) return 'duplicate';
-  if (disp.indexOf('mail') !== -1 && disp.indexOf('not yet') === -1) return 'mailed';
+  /* Read the key the decision already produced. This used to substring-match the DISPLAY string,
+     which filed "Patch earned — will be mailed" and "Opted out — not mailed" as MAILED, because both
+     contain "mail". A classifier must never be the source of truth: buildEvents decides from
+     p.mailed_at / optoutTypes / sp_type, and that decision is what gets grouped here.
+     An unrecognised key degrades to 'pending' — never to 'mailed'. Claiming an unmailed patch was
+     posted is the failure that matters; the reverse is merely untidy. */
+  var k = r && r.statusKey;
+  if (k === 'mailed' || k === 'optout' || k === 'shutout' || k === 'duplicate' || k === 'pending') return k;
   return 'pending';
 }
 function statusFilterKey(r) { return statusClass(r); }
@@ -1614,6 +1618,7 @@ function renderStatusFilters() {
   var filters = [
     { key: 'pending',   label: 'Not Yet Mailed' },
     { key: 'mailed',    label: 'Mailed' },
+    { key: 'optout',    label: 'Opted Out' },
     { key: 'shutout',   label: 'Shutout' },
     { key: 'duplicate', label: 'Duplicate' }
   ];
@@ -2042,10 +2047,14 @@ function buildEvents(bdRows, skunks, patches, optoutTypes) {
     var teamName = teamDisplay(e.division_number, e.team_number);
 
     var statusDisplay;
+
+    var statusKey = 'pending';
     if (e.sp_type === 's') {
       statusDisplay = 'Shutout — no patch';
+      statusKey = 'shutout';
     } else if (e._dupIdx > 0) {
       statusDisplay = 'Already earned this patch';
+      statusKey = 'duplicate';
     } else {
       var p = (e.sp_type === '8m' || e.sp_type === '9m' || e.sp_type === 'g')
         ? patchBySp[e.sp_type]
@@ -2058,15 +2067,19 @@ function buildEvents(bdRows, skunks, patches, optoutTypes) {
             patches will never actually be mailed)
          3. patch record exists            → "Not Yet Mailed"
          4. otherwise                      → "Patch earned — will be mailed" */
-      if (p && p.mailed_at)                  statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at)
+      if (p && p.mailed_at)                { statusDisplay = 'Patch mailed ' + fmtMailDate(p.mailed_at)
                                                                + fmtMailedTo(p);
-      else if (optoutTypes.has(e.sp_type))   statusDisplay = 'Opted out — not mailed';
-      else if (p)                            statusDisplay = 'Not Yet Mailed';
-      else                                   statusDisplay = 'Patch earned — will be mailed';
+                                             statusKey = 'mailed'; }
+      else if (optoutTypes.has(e.sp_type)) { statusDisplay = 'Opted out — not mailed';
+                                             statusKey = 'optout'; }
+      else if (p)                          { statusDisplay = 'Not Yet Mailed';
+                                             statusKey = 'pending'; }
+      else                                 { statusDisplay = 'Patch earned — will be mailed';
+                                             statusKey = 'pending'; }
     }
 
     return { spDescription: label, week: e.week, team: team,
-             teamName: teamName, statusDisplay: statusDisplay };
+             teamName: teamName, statusDisplay: statusDisplay, statusKey: statusKey };
   });
 }
 
