@@ -20,15 +20,16 @@
          background:linear-gradient(90deg,var(--red),var(--blue)); border-radius:2px; }
   h1 { margin:0 0 14px; font-size:1.3rem; letter-spacing:-.01em; }
   p { margin:0 0 16px; color:var(--mut); }
-  a.mail { color:var(--blue); font-weight:600; text-decoration:none; word-break:break-all; }
+  a.mail { color:var(--red); font-weight:600; text-decoration:none; word-break:break-all; }
   a.mail:hover { text-decoration:underline; }
-  .btn { display:block; margin:22px 0 0; padding:15px 18px; min-height:48px;
-         background:var(--red); color:#fff; font-weight:650; font-size:1rem;
-         border-radius:10px; text-decoration:none; }
-  .btn:hover { filter:brightness(1.07); }
+  .btn { display:block; width:100%; margin:22px 0 0; padding:15px 18px; min-height:48px;
+         background:var(--red); color:#fff; font-weight:650; font-size:1rem; font-family:inherit;
+         border:0; border-radius:10px; cursor:pointer; }
+  .btn:hover:not(:disabled) { filter:brightness(1.07); }
   .btn:focus-visible { outline:3px solid var(--blue); outline-offset:3px; }
-  .btn.done { background:transparent; color:var(--mut); border:1px solid var(--line);
-              font-weight:600; pointer-events:none; cursor:default; }
+  .btn:disabled { cursor:default; }
+  .btn.done { background:transparent; color:var(--mut); border:1px solid var(--line); font-weight:600; }
+  .btn.err  { background:transparent; color:var(--red); border:1px solid var(--red); font-weight:600; }
   .sig { margin:20px 0 0; font-size:.82rem; color:var(--mut); letter-spacing:.04em; }
 </style>
 </head>
@@ -37,28 +38,57 @@
     <div class="bar"></div>
     <h1>PatchCheck is no longer available.</h1>
     <p>Questions? <a class="mail" href="mailto:southportlandmetroapa@gmail.com">southportlandmetroapa@gmail.com</a></p>
-    <a class="btn" id="b" href="mailto:southportlandmetroapa@gmail.com?subject=PatchCheck%20-%20I'd%20use%20this%20again&body=I%20used%20PatchCheck%20and%20I'd%20use%20it%20again%20if%20there's%20ever%20a%20new%20version.%0A%0A(Anything%20you%20want%20to%20add%20is%20welcome%20-%20what%20you%20used%20it%20for%2C%20what%20you'd%20want%20in%20it.)%0A">I&rsquo;d use this again</a>
+    <button class="btn" id="b" type="button">I&rsquo;d use this again</button>
     <p class="sig">&mdash; SPM APA</p>
   </main>
 <script>
-// Local only: no network, no keys, no third party. FAILS OPEN - if storage is
-// unavailable (private window, blocked site data) the button stays usable,
-// because a duplicate reply is cheaper than a lost one. The key is per-app so
-// one notice page never disables another. The plain address above stays live
-// either way, since clicking is not the same as sending.
+// Sends through the league's existing Apps Script mailer, so the click IS the
+// send and the button can only claim receipt the server actually confirmed.
+// The previous build used mailto: and confirmed on a 400ms timer - with no
+// default mail client that opened nothing and still said "we got it".
+//
+// Content-Type MUST be text/plain. application/json triggers a CORS preflight
+// that Apps Script cannot answer; GAS parses the raw body regardless.
 (function () {
-  var KEY = 'spm-notice-patchcheck-v1';
+  var KEY = 'spm-notice-patchcheck-v2';
   var b = document.getElementById('b');
   if (!b) return;
-  function done() {
-    b.textContent = 'Thanks — we got it';
-    b.classList.add('done');
-    b.removeAttribute('href');
+
+  function lock(text, cls) {
+    b.textContent = text;
+    b.classList.add(cls);
+    b.disabled = true;
   }
-  try { if (localStorage.getItem(KEY)) done(); } catch (e) {}
+  // Only a CONFIRMED send is remembered. A failure is never stored, so the
+  // player can try again - and if storage is unavailable the button simply
+  // stays usable. Fail open: a duplicate reply costs less than a lost one.
+  try { if (localStorage.getItem(KEY)) lock('Thanks \u2014 we got it', 'done'); } catch (e) {}
+
   b.addEventListener('click', function () {
-    try { localStorage.setItem(KEY, '1'); } catch (e) {}
-    setTimeout(done, 400);
+    if (b.disabled) return;
+    b.disabled = true;
+    b.textContent = 'Sending\u2026';
+
+    fetch('https://script.google.com/macros/s/AKfycbzGTzkBRTrIIP_tD6sbtOOUmNZkXDdtxPoO4c8fdWt5h3tZFueNSISPv8Q3LWStx73Whw/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'notice_interest', app: 'PatchCheck' })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.ok) {
+          try { localStorage.setItem(KEY, '1'); } catch (e) {}
+          lock('Thanks \u2014 we got it', 'done');
+        } else {
+          throw new Error('not ok');
+        }
+      })
+      .catch(function () {
+        // Say so plainly and point at the address above. Never claim receipt.
+        b.disabled = false;
+        b.classList.add('err');
+        b.textContent = 'Didn\u2019t send \u2014 please email us instead';
+      });
   });
 })();
 </script>
